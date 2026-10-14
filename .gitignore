@@ -1,0 +1,14 @@
+node_modules/
+.pnpm-store/
+dist/
+.env
+.env.local
+.envOPENAI_API_KEY=*
+*.log
+.superpowers/
+playwright-report/
+test-results/
+design/qa/professional/cache/
+.deployment/
+.env.*
+!.env.example

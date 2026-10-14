@@ -1,0 +1,55 @@
+# 光调 · 本地 AI 调色工作台
+
+一款本地优先的单页照片调色应用。照片只在浏览器中处理，Node 服务仅把文字提示词发送给兼容 OpenAI Chat Completions 的接口。
+
+## 在线使用与 GitHub 部署
+
+网页地址：[光调在线修图](https://dian-wa.github.io/lightune-photo-editor/)。源码仓库：[Dian-Wa/lightune-photo-editor](https://github.com/Dian-Wa/lightune-photo-editor)。
+
+GitHub Pages 版本支持照片导入、86 项调整、内置／自定义模板、撤销与对比、JPG／PNG／WebP 导出，以及模板备份。照片仍在浏览器本地处理。
+
+GitHub Pages 只托管静态前端，无法运行 `server/index.ts`。未连接独立后端时，网页会明确显示「AI 需连接后端」，其他修图功能照常使用。本机启动方式仍保留完整 AI 代理功能。
+
+仓库的 `.github/workflows/deploy-pages.yml` 会在推送到 `main` 后自动安装锁定依赖、运行测试、构建并发布网页。仓库 Settings → Pages 的 Source 需设为 GitHub Actions。构建会自动使用 Pages 提供的仓库子路径。
+
+如以后部署独立 AI 后端，可在仓库 Settings → Secrets and variables → Actions → Variables 中填写公开的 `VITE_API_BASE_URL`（例如 `https://your-backend.example.com`），然后重新运行工作流。此地址对应后端的 `/api/recipes/generate` 接口；后端还需配置网页来源的 CORS、访问控制和调用额度。`OPENAI_API_KEY` 只配置在该后端，不能放入 `VITE_*` 变量或前端代码。
+
+本机 `.env`、部署认证工具及缓存不进入仓库；用户照片与 IndexedDB 模板不会随源码上传。
+
+## 启动
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+notepad .env
+# 在记事本中填写服务端密钥并保存；不配置也可使用手动调色功能
+# 首次使用且没有 node_modules 文件夹时，先运行 npm.cmd install
+npm.cmd run dev
+```
+
+打开 `http://127.0.0.1:5173`。本地 AI 代理运行在 `http://127.0.0.1:8787`。
+
+## 主要功能
+
+- 内置、自定义和 AI 调色模板
+- JPG / PNG / WebP 本地导入与导出
+- 前后对比、按住看原图、撤销、重做、重置
+- IndexedDB 模板持久化、JSON 备份与恢复
+- 模板缩略图、复制、重命名、收藏与回收站
+- 导出尺寸/体积预估和隐私优先的元数据清理
+
+## 精细与专业调整
+
+右侧「手动调整」现在有 86 项参数，按九个模块分组。常用光照、色彩、质感默认展开，专业工具点击标题展开。
+
+- 光照新增白色色阶、黑色色阶和中间调；色彩新增整体色相；质感新增清晰度与褪色感。
+- 单色细调 HSL：选择红、橙、黄、绿、青、蓝、紫或洋红，再分别调节色相、饱和度、明度。
+- 曲线：RGB 总曲线与红／绿／蓝独立通道。五个固定输入控制点支持上下拖动，或选择输入点后填写 0–255 的输出值；键盘上下键调整 1，Shift+上下键调整 10。拖动一次是一条撤销记录。
+- 色彩分级：阴影、中间调、高光分别设置色相与饱和度，混合与平衡控制区域过渡。
+- 黑白混色：先提高黑白强度，再按原始颜色调整转换后的明度。
+- 暗角支持中点、圆度、羽化；颗粒支持大小和粗糙度，噪声图案保持确定性。
+
+滑杆旁的数字可直接输入，按 Enter 或离开输入框生效，Esc 取消当前输入。每组「开启」按钮可暂时关闭效果并保留参数，回转箭头只重置该组。所有高级参数与开关支持模板保存、AI 配方、会话恢复和 JSON 备份；旧模板会补齐默认参数。
+
+曲线采用固定五点的平滑插值，清晰度采用局部亮度反差算法。局部蒙版、降噪、裁剪与透视校正仍属于后续功能。
+
+设计基准位于 `design/lightune-editor-concept.png`。

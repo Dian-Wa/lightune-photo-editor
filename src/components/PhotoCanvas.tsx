@@ -1,0 +1,108 @@
+import { useEffect, useRef, useState } from 'react';
+import { Columns2, ImageUp } from 'lucide-react';
+import type { AdjustmentRecipe } from '../domain/recipe';
+import { applyRecipeToPixels, assertSafePixelCount, calculateOutputSize } from '../lib/imageMath';
+
+type Props = { imageUrl: string; recipe: AdjustmentRecipe; fileName: string; onImageInfo?: (size: { width: number; height: number }) => void };
+
+async function loadImage(url: string) {
+  const image = new Image();
+  image.decoding = 'async';
+  image.src = url;
+  await image.decode();
+  return image;
+}
+
+async function processPixels(pixels: Uint8ClampedArray, recipe: AdjustmentRecipe, width: number, height: number) {
+  if (typeof Worker === 'undefined') return applyRecipeToPixels(pixels, recipe, width, height);
+  const worker = new Worker(new URL('../workers/imageWorker.ts', import.meta.url), { type: 'module' });
+  try {
+    return await new Promise<Uint8ClampedArray>((resolve, reject) => {
+      worker.onmessage = (event: MessageEvent<{ pixels: ArrayBuffer }>) => resolve(new Uint8ClampedArray(event.data.pixels));
+      worker.onerror = (event) => reject(new Error(event.message || '后台图像处理失败'));
+      worker.postMessage({ pixels: pixels.buffer, recipe, width, height }, [pixels.buffer]);
+    });
+  } finally { worker.terminate(); }
+}
+
+export async function renderAdjustedImage(url: string, recipe: AdjustmentRecipe, maxEdge = 1600) {
+  const image = await loadImage(url);
+  const { width, height } = calculateOutputSize(image.naturalWidth, image.naturalHeight, maxEdge);
+  assertSafePixelCount(width, height);
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('浏览器无法创建图像画布');
+  context.drawImage(image, 0, 0, width, height);
+  const frame = context.getImageData(0, 0, width, height);
+  const processed = await processPixels(frame.data, recipe, width, height);
+  context.putImageData(new ImageData(processed, width, height), 0, 0);
+  return canvas;
+}
+
+export async function exportAdjustedImage(url: string, recipe: AdjustmentRecipe, options: { format: string; quality: number; maxEdge: number; name: string }) {
+  const canvas = await renderAdjustedImage(url, recipe, options.maxEdge);
+  const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error('导出失败')), `image/${options.format}`, options.quality));
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement('a'); link.href = href; link.download = `${options.name || 'lightune'}-光调.${options.format === 'jpeg' ? 'jpg' : options.format}`; link.click();
+  window.setTimeout(() => URL.revokeObjectURL(href), 1000);
+  return { bytes: blob.size, width: canvas.width, height: canvas.height };
+}
+
+export async function createPresetThumbnail(url: string, recipe: AdjustmentRecipe) {
+  const canvas = await renderAdjustedImage(url, recipe, 240);
+  return canvas.toDataURL('image/jpeg', 0.74);
+}
+
+export default function PhotoCanvas({ imageUrl, recipe, fileName, onImageInfo }: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [split, setSplit] = useState(50);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState('');
+  const [holdingOriginal, setHoldingOriginal] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setBusy(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const rendered = await renderAdjustedImage(imageUrl, recipe, 1400);
+        if (!active || !canvasRef.current) return;
+        const canvas = canvasRef.current;
+        canvas.width = rendered.width; canvas.height = rendered.height;
+        canvas.getContext('2d')?.drawImage(rendered, 0, 0);
+        setError('');
+      } catch (error) { if (active) setError(error instanceof Error ? error.message : '无法处理这张图片，请换一张重试'); }
+      finally { if (active) setBusy(false); }
+    }, 90);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [imageUrl, recipe]);
+
+  return <section className="stage" aria-label="照片编辑画布">
+    <div className="canvas-shell">
+      <canvas ref={canvasRef} aria-label="效果图预览" />
+      <div className="original-layer" style={{ clipPath: `inset(0 ${holdingOriginal ? 0 : 100 - split}% 0 0)` }}>
+        <img src={imageUrl} alt={`${fileName} 原图`} draggable={false} onLoad={(event) => onImageInfo?.({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} />
+      </div>
+      {!holdingOriginal ? <div className="split-line" style={{ left: `${split}%` }}><Columns2 size={15} /></div> : null}
+      <span className="image-label original-label">原图</span><span className="image-label effect-label">效果图</span>
+      {busy ? <div className="processing">正在渲染预览…</div> : null}
+      {error ? <div className="processing error">{error}</div> : null}
+    </div>
+    <div className="stage-footer">
+      <div className="file-chip"><ImageUp size={14} /><span>{fileName}</span></div>
+      <button
+        className="hold-original"
+        aria-label="按住查看原图"
+        aria-pressed={holdingOriginal}
+        onPointerDown={() => setHoldingOriginal(true)}
+        onPointerUp={() => setHoldingOriginal(false)}
+        onPointerCancel={() => setHoldingOriginal(false)}
+        onPointerLeave={() => setHoldingOriginal(false)}
+        onKeyDown={(event) => { if (event.key === ' ' || event.key === 'Enter') setHoldingOriginal(true); }}
+        onKeyUp={() => setHoldingOriginal(false)}
+      >{holdingOriginal ? '松开返回效果' : '按住看原图'}</button>
+      <label className="compare-range">前后对比 <input aria-label="前后对比位置" type="range" min="0" max="100" value={split} onChange={(e) => setSplit(Number(e.target.value))} /></label>
+    </div>
+  </section>;
+}
