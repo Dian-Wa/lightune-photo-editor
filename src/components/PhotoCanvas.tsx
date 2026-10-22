@@ -56,6 +56,7 @@ export async function createPresetThumbnail(url: string, recipe: AdjustmentRecip
 
 export default function PhotoCanvas({ imageUrl, recipe, fileName, onImageInfo }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const activePointer = useRef<number | null>(null);
   const [split, setSplit] = useState(50);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
@@ -78,8 +79,31 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, onImageInfo }:
     return () => { active = false; window.clearTimeout(timer); };
   }, [imageUrl, recipe]);
 
+  const setSplitFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (bounds.width > 0) setSplit(Math.round(Math.max(0, Math.min(100, (event.clientX - bounds.left) / bounds.width * 100))));
+  };
+
   return <section className="stage" aria-label="照片编辑画布">
-    <div className="canvas-shell">
+    <div className="canvas-shell" title="点击或拖动以调整前后对比位置"
+      onPointerDown={(event) => {
+        if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        activePointer.current = event.pointerId;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setSplitFromPointer(event);
+      }}
+      onPointerMove={(event) => { if (activePointer.current === event.pointerId) setSplitFromPointer(event); }}
+      onPointerUp={(event) => {
+        if (activePointer.current !== event.pointerId) return;
+        setSplitFromPointer(event);
+        activePointer.current = null;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onPointerCancel={(event) => {
+        if (activePointer.current !== event.pointerId) return;
+        activePointer.current = null;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}>
       <canvas ref={canvasRef} aria-label="效果图预览" />
       <div className="original-layer" style={{ clipPath: `inset(0 ${holdingOriginal ? 0 : 100 - split}% 0 0)` }}>
         <img src={imageUrl} alt={`${fileName} 原图`} draggable={false} onLoad={(event) => onImageInfo?.({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} />
