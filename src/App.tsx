@@ -11,6 +11,7 @@ import { emptyRecipe, normalizeRecipe, type AdjustmentRecipe, type Preset, type 
 import { clearPresetStore, deletePreset, loadSession, loadUserPresets, parsePresetBackup, savePreset, savePresetBatch, saveSession } from './lib/presetStore';
 import { calculateOutputSize, estimateEncodedBytes } from './lib/imageMath';
 import { aiAvailable, presetPreviewUrl, recipeApiUrl, sampleImageUrl } from './lib/deployment';
+import { loadAiSettings, rememberAiSettings, requestDirectRecipe } from './lib/directAi';
 
 const sampleNames: Record<Preset['previewType'], string> = { portrait: '内置旅行人像样片', landscape: '内置风景样片', food: '内置美食样片', indoor: '内置室内样片' };
 type Tab = 'builtin' | 'mine' | 'favorite';
@@ -40,7 +41,13 @@ function Topbar({ canUndo, canRedo, exporting, onUndo, onRedo, onReset, onImport
 }
 
 export default function App() {
-  const aiEnabled = aiAvailable();
+  const proxyAvailable = aiAvailable();
+  const [aiMode, setAiMode] = useState<'direct' | 'proxy'>('direct');
+  const [aiConfig, setAiConfig] = useState(loadAiSettings);
+  const [showAiKey, setShowAiKey] = useState(false);
+  const [aiMessage, setAiMessage] = useState('');
+  const aiController = useRef<AbortController | null>(null);
+  useEffect(() => () => aiController.current?.abort(), []);
   const [tab, setTab] = useState<Tab>('builtin');
   const [query, setQuery] = useState('');
   const [userPresets, setUserPresets] = useState<Preset[]>([]);
@@ -124,16 +131,27 @@ export default function App() {
     setNotice(`已保存「${name}」`);
   };
   const generateRecipe = async () => {
-    if (!aiEnabled) return setNotice('GitHub Pages 提供本地修图；AI 配方需要另行连接后端');
+    if (aiBusy) return;
+    if (aiMode === 'proxy' && !proxyAvailable) return setNotice('当前页面未配置代理，请使用浏览器直连');
     if (prompt.trim().length < 2) return setNotice('请至少输入 2 个字的调色描述');
-    setAiBusy(true); setNotice('AI 正在理解你的调色意图…');
+    const controller = new AbortController(); aiController.current = controller;
+    setAiBusy(true); setAiMessage('AI 正在理解你的调色意图…'); setNotice('AI 正在理解你的调色意图…');
     try {
-      const response = await fetch(recipeApiUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: prompt.trim(), previewType }) });
-      const body = await response.json() as { name?: string; description?: string; recipe?: unknown; error?: string };
-      if (!response.ok) throw new Error(body.error || 'AI 请求失败');
-      pushRecipe(normalizeRecipe(body.recipe)); setRecipeSource('ai'); setAiDraft({ name: body.name || 'AI 调色模板', description: body.description || 'AI 生成的调色配方' }); setNotice(`已生成「${body.name}」，可继续微调后保存`);
-    } catch (error) { setNotice(`${error instanceof Error ? error.message : 'AI 请求失败'}；手动调色仍可使用`); }
-    finally { setAiBusy(false); }
+      const body = aiMode === 'direct' ? await requestDirectRecipe(aiConfig, prompt, previewType, controller.signal) : await (async () => {
+        const response = await fetch(recipeApiUrl(), { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: prompt.trim(), previewType }) });
+        const result = await response.json() as { name?: string; description?: string; recipe?: unknown; error?: string; warnings?: string[] };
+        if (!response.ok) throw new Error(result.error || 'AI 请求失败');
+        return result;
+      })();
+      if (controller.signal.aborted) return;
+      pushRecipe(normalizeRecipe(body.recipe)); setRecipeSource('ai'); setAiDraft({ name: body.name || 'AI 调色模板', description: body.description || 'AI 生成的调色配方' });
+      const message = `已生成「${body.name || 'AI 调色模板'}」，可继续微调后保存`;
+      setNotice(message); setAiMessage(message + (body.warnings?.length ? `；${body.warnings.join('；')}` : ''));
+    } catch (error) {
+      const message = controller.signal.aborted ? '已取消 AI 请求' : error instanceof Error ? error.message : 'AI 请求失败';
+      setAiMessage(message); setNotice(`${message}；手动调色仍可使用`);
+    }
+    finally { aiController.current = null; setAiBusy(false); }
   };
   const toggleFavorite = async (preset: Preset) => {
     if (preset.source === 'builtin') return setNotice('内置模板只读，可另存后收藏');
@@ -208,10 +226,28 @@ export default function App() {
       <aside className="inspector">
         <section className="ai-panel">
           <div className="section-title"><Sparkles size={18} /><h2>AI 调色灵感</h2></div>
+          <details className="ai-connection" open>
+            <summary>AI 服务配置</summary>
+            <fieldset disabled={aiBusy}>
+              <label>调用方式<select aria-label="AI 调用方式" value={aiMode} onChange={(event) => setAiMode(event.target.value as 'direct' | 'proxy')}><option value="direct">浏览器直连（自备密钥）</option><option value="proxy" disabled={!proxyAvailable}>原有代理{!proxyAvailable ? '（未配置）' : ''}</option></select></label>
+              {aiMode === 'direct' ? <>
+                <p className="connection-help">支持 OpenAI 兼容的 Chat Completions 接口。仅发送文字，需服务商允许浏览器跨域（CORS）。</p>
+                <label>接口地址<input aria-label="AI 接口地址" type="url" autoComplete="off" spellCheck={false} placeholder="https://服务商域名/v1" value={aiConfig.baseUrl} onChange={(event) => setAiConfig((current) => ({ ...current, baseUrl: event.target.value }))} /></label>
+                <p className="connection-help">填写含版本号的基础地址，或完整 /chat/completions 地址。</p>
+                <label>API 密钥<div className="ai-key-row"><input aria-label="AI API 密钥" type={showAiKey ? 'text' : 'password'} autoComplete="off" spellCheck={false} placeholder="仅保留在当前页面" value={aiConfig.apiKey} onChange={(event) => setAiConfig((current) => ({ ...current, apiKey: event.target.value }))} /><button type="button" aria-label={showAiKey ? '隐藏密钥' : '显示密钥'} onClick={() => setShowAiKey((value) => !value)}>{showAiKey ? '隐藏' : '显示'}</button></div></label>
+                <label>模型名称<input aria-label="AI 模型名称" autoComplete="off" spellCheck={false} placeholder="填写服务商提供的模型 ID" value={aiConfig.model} onChange={(event) => setAiConfig((current) => ({ ...current, model: event.target.value }))} /></label>
+                <label className="ai-json-mode"><input type="checkbox" checked={aiConfig.jsonMode} onChange={(event) => setAiConfig((current) => ({ ...current, jsonMode: event.target.checked }))} />启用 JSON 模式（服务商支持时使用）</label>
+                <div className="ai-config-actions"><button type="button" onClick={() => { try { rememberAiSettings(aiConfig); setAiMessage('已记住地址和模型，密钥不会保存'); } catch { setAiMessage('浏览器不允许保存设置，当前页面仍可使用'); } }}>记住地址和模型</button><button type="button" onClick={() => { setAiConfig((current) => ({ ...current, apiKey: '' })); setShowAiKey(false); setAiMessage('已清空当前页面密钥'); }}>清空密钥</button></div>
+                <p className="connection-help">仅填写你信任的服务地址，密钥将直接发送给该服务；刷新后需重新输入。密钥不进入模板或备份。</p>
+              </> : null}
+            </fieldset>
+          </details>
           <textarea aria-label="AI 调色描述" maxLength={500} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
-          <div className="ai-options"><select aria-label="样片类型" value={previewType} onChange={(event) => { const type = event.target.value; setPreviewType(type); if (isSample) { setImageUrl(sampleImageUrl(type)); setFileName(`内置${event.target.options[event.target.selectedIndex].text}样片`); } }}><option value="portrait">人像</option><option value="landscape">风景</option><option value="food">美食</option><option value="indoor">室内</option></select><span>{prompt.length}/500</span></div>
-          <button className="generate" disabled={aiBusy || !aiEnabled} onClick={() => void generateRecipe()}><Sparkles size={17} />{!aiEnabled ? 'AI 需连接后端' : aiBusy ? '正在生成…' : '生成配方'}</button>
-          <p className="privacy-note">{aiEnabled ? '只发送文字描述，照片始终留在本机' : 'GitHub Pages 提供本地修图；AI 配方需另行连接后端，照片始终留在本机'}</p>
+          <div className="ai-options"><select aria-label="样片类型" disabled={aiBusy} value={previewType} onChange={(event) => { const type = event.target.value; setPreviewType(type); if (isSample) { setImageUrl(sampleImageUrl(type)); setFileName(`内置${event.target.options[event.target.selectedIndex].text}样片`); } }}><option value="portrait">人像</option><option value="landscape">风景</option><option value="food">美食</option><option value="indoor">室内</option></select><span>{prompt.length}/500</span></div>
+          <button className="generate" disabled={aiBusy} onClick={() => void generateRecipe()}><Sparkles size={17} />{aiBusy ? '正在生成…' : '生成配方'}</button>
+          {aiBusy ? <button className="ai-cancel" onClick={() => aiController.current?.abort()}>取消生成</button> : null}
+          <p className="privacy-note">{aiMode === 'direct' ? '浏览器直连你配置的 AI 服务，无需部署后端；照片始终留在本机' : '只发送文字描述，照片始终留在本机'}</p>
+          {aiMessage ? <p className="ai-result" role="status">{aiMessage}</p> : null}
         </section>
         <AdjustmentPanel recipe={recipe} dirty={dirty} onFieldChange={updateField} onRecipeChange={pushRecipe} />
         <section className="export-settings">
