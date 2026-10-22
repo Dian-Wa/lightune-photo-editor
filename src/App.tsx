@@ -12,6 +12,7 @@ import { clearPresetStore, deletePreset, loadSession, loadUserPresets, parsePres
 import { calculateOutputSize, estimateEncodedBytes } from './lib/imageMath';
 import { aiAvailable, presetPreviewUrl, recipeApiUrl, sampleImageUrl } from './lib/deployment';
 import { loadAiSettings, rememberAiSettings, requestDirectRecipe } from './lib/directAi';
+import { recipeExplanationMessage, chineseExplanation } from './domain/recipeExplanation';
 
 const sampleNames: Record<Preset['previewType'], string> = { portrait: '内置旅行人像样片', landscape: '内置风景样片', food: '内置美食样片', indoor: '内置室内样片' };
 type Tab = 'builtin' | 'mine' | 'favorite';
@@ -144,9 +145,10 @@ export default function App() {
         return result;
       })();
       if (controller.signal.aborted) return;
-      pushRecipe(normalizeRecipe(body.recipe)); setRecipeSource('ai'); setAiDraft({ name: body.name || 'AI 调色模板', description: body.description || 'AI 生成的调色配方' });
-      const message = `已生成「${body.name || 'AI 调色模板'}」，可继续微调后保存`;
-      setNotice(message); setAiMessage(message + (body.warnings?.length ? `；${body.warnings.join('；')}` : ''));
+      const nextRecipe = normalizeRecipe(body.recipe);
+      const result = recipeExplanationMessage({ ...body, recipe: nextRecipe });
+      pushRecipe(nextRecipe); setRecipeSource('ai'); setAiDraft({ name: result.localized.name, description: result.localized.description });
+      setNotice(result.title); setAiMessage(result.explanation);
     } catch (error) {
       const message = controller.signal.aborted ? '已取消 AI 请求' : error instanceof Error ? error.message : 'AI 请求失败';
       setAiMessage(message); setNotice(`${message}；手动调色仍可使用`);
@@ -205,7 +207,7 @@ export default function App() {
         <div className="preset-list">
           {activePresets.map((preset, index) => <article key={preset.id} className={`preset-item ${selectedId === preset.id ? 'selected' : ''}`}>
             <button className="preset-select" onClick={() => selectPreset(preset)}>
-              <span className={`preset-thumb tone-${index % 6}`}>{preset.previewDataUrl ? <img src={presetPreviewUrl(preset.previewDataUrl)} alt="" /> : null}</span><span><strong>{preset.name}</strong><small>{preset.description}</small></span>
+              <span className={`preset-thumb tone-${index % 6}`}>{preset.previewDataUrl ? <img src={presetPreviewUrl(preset.previewDataUrl)} alt="" /> : null}</span><span><strong>{preset.name}</strong><small>{preset.source === 'ai' ? chineseExplanation(preset.description || '', '自然调色配方，可结合原图继续微调。') : preset.description}</small></span>
             </button>
             <span className="preset-actions">
               <button aria-label={`复制 ${preset.name}`} title="复制模板" onClick={() => void duplicate(preset)}><Copy size={15} /></button>

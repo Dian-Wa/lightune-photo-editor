@@ -40,6 +40,17 @@ describe('photo editor workspace', () => {
     fireEvent.click(screen.getByRole('button', { name: '清空密钥' }));
     expect(screen.getByLabelText('AI API 密钥')).toHaveValue('');
   });
+  it('shows Chinese explanations even when an older proxy returns English parameter names', async () => {
+    vi.stubEnv('VITE_STATIC_MODE', 'false');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ name: '清透日系胶片肖像',
+      description: '可根据实际画面调整strength', warnings: ['可用grain参数增强质感'], recipe: { strength: 80, grain: 10 } }))));
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('AI 调用方式'), { target: { value: 'proxy' } });
+    fireEvent.click(screen.getByRole('button', { name: '生成配方' }));
+    await waitFor(() => expect(screen.getByText(/可用颗粒参数增强质感/)).toBeInTheDocument());
+    expect(document.querySelector('.ai-result')?.textContent).toContain('调整风格强度');
+    expect(document.querySelector('.ai-result')?.textContent).not.toMatch(/\p{Script=Latin}/u);
+  });
   it('renders the complete local editing workflow', async () => {
     render(<App />);
     expect(screen.getByRole('button', { name: /导入照片/ })).toBeInTheDocument();
