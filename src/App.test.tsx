@@ -1,13 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import * as presetStore from './lib/presetStore';
 
 beforeEach(() => {
   const values: Record<string, string> = {};
   vi.stubGlobal('localStorage', { getItem: (key: string) => values[key] || null,
     setItem: (key: string, value: string) => { values[key] = value; }, toJSON: () => values });
 });
-afterEach(() => { cleanup(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('photo editor workspace', () => {
   it('offers direct AI configuration on Pages while keeping manual editing usable', () => {
@@ -134,5 +135,58 @@ describe('photo editor workspace', () => {
     fireEvent.change(numeric, { target: { value: '' } });
     fireEvent.blur(numeric);
     expect(numeric).toHaveValue(45);
+  });
+
+  it('creates a template from current adjustments and updates the same template later', async () => {
+    const saved = vi.spyOn(presetStore, 'savePreset').mockResolvedValue(undefined);
+    vi.spyOn(presetStore, 'saveSession').mockResolvedValue(undefined);
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '新建模板' })).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('亮度'), { target: { value: '31' } });
+    fireEvent.click(screen.getByRole('button', { name: '新建模板' }));
+    expect(screen.getByRole('dialog', { name: '新建模板' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('模板名称'), { target: { value: '我的暖调' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存新模板' }));
+    await waitFor(() => expect(screen.getByText('已保存新模板「我的暖调」')).toBeInTheDocument());
+    const created = saved.mock.calls[0][0];
+    expect(created.recipe.brightness).toBe(31);
+    expect(created.source).toBe('manual');
+    fireEvent.change(screen.getByLabelText('亮度'), { target: { value: '46' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存为模板' }));
+    await waitFor(() => expect(screen.getByText('已更新「我的暖调」')).toBeInTheDocument());
+    expect(saved.mock.calls[1][0].id).toBe(created.id);
+    expect(saved.mock.calls[1][0].recipe.brightness).toBe(46);
+  });
+
+  it('copies current edits into a selected new template and resets the built-in separately', async () => {
+    const saved = vi.spyOn(presetStore, 'savePreset').mockResolvedValue(undefined);
+    vi.spyOn(presetStore, 'saveSession').mockResolvedValue(undefined);
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '复制 清透自然' })).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('亮度'), { target: { value: '28' } });
+    fireEvent.click(screen.getByRole('button', { name: '复制 清透自然' }));
+    await waitFor(() => expect(screen.getByText(/已复制并选中「清透自然 副本」/)).toBeInTheDocument());
+    expect(saved.mock.calls[0][0].recipe.brightness).toBe(28);
+    expect(saved.mock.calls[0][0].source).toBe('manual');
+    fireEvent.change(screen.getByLabelText('亮度'), { target: { value: '38' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存为模板' }));
+    await waitFor(() => expect(screen.getByText('已更新「清透自然 副本」')).toBeInTheDocument());
+    expect(saved.mock.calls[1][0].id).toBe(saved.mock.calls[0][0].id);
+    fireEvent.click(screen.getByRole('button', { name: '内置模板' }));
+    fireEvent.click(screen.getByRole('button', { name: '重置内置模板 清透自然' }));
+    expect(screen.getByLabelText('亮度')).toHaveValue('0');
+    expect(screen.getByText('「清透自然」已恢复为内置初始样式')).toBeInTheDocument();
+    expect(saved).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the save dialog open and explains a storage failure', async () => {
+    vi.spyOn(presetStore, 'savePreset').mockRejectedValue(new Error('本地空间不足'));
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存为模板' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '保存为模板' }));
+    expect(screen.getByRole('dialog', { name: '另存为新模板' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '保存新模板' }));
+    await waitFor(() => expect(screen.getByText('模板保存失败：本地空间不足')).toBeInTheDocument());
+    expect(screen.getByRole('dialog', { name: '另存为新模板' })).toBeInTheDocument();
   });
 });

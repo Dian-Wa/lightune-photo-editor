@@ -12,6 +12,7 @@
 .preset-actions{gap:3px}
 .preset-actions button{border:0;background:transparent;color:inherit;padding:3px;display:grid;place-items:center;cursor:pointer;border-radius:4px}
 .preset-actions button:hover{color:var(--accent);background:#30373c}
+.preset-save-dialog p{color:#aeb7bc;font-size:13px;margin:15px 0}.preset-save-dialog label{display:block;color:#cbd1d4;font-size:12px;margin-bottom:7px}.preset-save-dialog input{width:100%;padding:10px 12px;border:1px solid #59636a;border-radius:7px;background:#171d20;color:#fff;outline:0}.preset-save-dialog input:focus{border-color:var(--accent)}.preset-save-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.preset-save-actions button{border:1px solid #485158;border-radius:7px;background:#30373c;color:#fff;padding:8px 15px;cursor:pointer}.preset-save-actions button[type=submit]{border-color:var(--accent);background:var(--accent);color:#211815;font-weight:700}.preset-save-actions button:disabled{opacity:.45;cursor:default}
 .hold-original{border:1px solid #3a4349;background:#20272b;color:#cdd3d6;border-radius:6px;padding:6px 9px;font-size:11px;cursor:pointer;touch-action:none}
 .hold-original[aria-pressed="true"]{border-color:var(--accent);color:#fff;background:#342621}
 .export-estimate{margin-top:10px;border:1px solid #384147;background:#20262a;border-radius:7px;padding:9px;text-align:center;color:#c9ced1;font-size:11px;font-variant-numeric:tabular-nums}

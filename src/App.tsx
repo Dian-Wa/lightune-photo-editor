@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArchiveRestore, Copy, Download, FileDown, FileUp, Heart, ImagePlus,
-  Pencil, RotateCcw, RotateCw, Save, Search, Settings2, Sparkles,
+  Pencil, Plus, RotateCcw, RotateCw, Save, Search, Settings2, Sparkles,
   Trash2, Undo2, Upload, X,
 } from 'lucide-react';
 import PhotoCanvas, { createPresetThumbnail, exportAdjustedImage } from './components/PhotoCanvas';
@@ -23,8 +23,8 @@ const downloadJson = (value: unknown, name: string) => {
   const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
 };
 
-function Topbar({ canUndo, canRedo, exporting, onUndo, onRedo, onReset, onImport, onSave, onExport }: {
-  canUndo: boolean; canRedo: boolean; exporting: boolean; onUndo: () => void; onRedo: () => void; onReset: () => void; onImport: () => void; onSave: () => void; onExport: () => void;
+function Topbar({ canUndo, canRedo, exporting, saving, presetsReady, onUndo, onRedo, onReset, onImport, onSave, onExport }: {
+  canUndo: boolean; canRedo: boolean; exporting: boolean; saving: boolean; presetsReady: boolean; onUndo: () => void; onRedo: () => void; onReset: () => void; onImport: () => void; onSave: () => void; onExport: () => void;
 }) {
   return <header className="topbar">
     <div className="brand"><span className="brand-mark">☼</span><strong>光调</strong><span className="brand-sub">本地调色工作台</span></div>
@@ -35,7 +35,7 @@ function Topbar({ canUndo, canRedo, exporting, onUndo, onRedo, onReset, onImport
       <button disabled={!canRedo} onClick={onRedo}><RotateCw size={17} />重做</button>
       <button onClick={onReset}><RotateCcw size={17} />重置</button>
       <span className="divider" />
-      <button onClick={onSave}><Save size={17} />保存为模板</button>
+      <button disabled={saving || !presetsReady} onClick={onSave}><Save size={17} />{saving ? '保存中…' : '保存为模板'}</button>
     </nav>
     <button className="export-top" disabled={exporting} onClick={onExport}><Upload size={18} />{exporting ? '导出中' : '导出'}</button>
   </header>;
@@ -52,6 +52,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('builtin');
   const [query, setQuery] = useState('');
   const [userPresets, setUserPresets] = useState<Preset[]>([]);
+  const [presetsReady, setPresetsReady] = useState(false);
   const [selectedId, setSelectedId] = useState('clean');
   const [history, setHistory] = useState<AdjustmentRecipe[]>([builtinPresets[0].recipe]);
   const [cursor, setCursor] = useState(0);
@@ -71,6 +72,8 @@ export default function App() {
   const [maxEdge, setMaxEdge] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [recycleOpen, setRecycleOpen] = useState(false);
+  const [saveDialog, setSaveDialog] = useState<{ mode: 'create' | 'save-as'; name: string } | null>(null);
+  const [saving, setSaving] = useState(false);
   const [imageSize, setImageSize] = useState<{ width: number; height: number }>();
   const photoInput = useRef<HTMLInputElement>(null);
   const presetInput = useRef<HTMLInputElement>(null);
@@ -79,12 +82,14 @@ export default function App() {
     void Promise.all([loadUserPresets(), loadSession()]).then(([presets, session]) => {
       setUserPresets(presets);
       if (session) { setHistory([session.recipe]); setCursor(0); setSelectedId(session.selectedId); setPrompt(session.prompt); setPreviewType(session.previewType); setRecipeSource(session.recipeSource || 'manual'); setAiDraft(session.aiDraft); setImageUrl(sampleImageUrl(session.previewType)); setFileName(sampleNames[session.previewType]); }
-    }).catch(() => setNotice('本地数据读取失败'));
+      setPresetsReady(true);
+    }).catch(() => { setPresetsReady(true); setNotice('本地数据读取失败，请检查浏览器存储权限'); });
   }, []);
   useEffect(() => {
+    if (!presetsReady) return;
     const timer = window.setTimeout(() => { void saveSession({ recipe, selectedId, prompt, previewType: previewType as Preset['previewType'], recipeSource, aiDraft }); }, 250);
     return () => window.clearTimeout(timer);
-  }, [recipe, selectedId, prompt, previewType, recipeSource, aiDraft]);
+  }, [presetsReady, recipe, selectedId, prompt, previewType, recipeSource, aiDraft]);
   useEffect(() => () => { if (imageUrl.startsWith('blob:')) URL.revokeObjectURL(imageUrl); }, [imageUrl]);
 
   const pushRecipe = (next: AdjustmentRecipe, markDirty = true) => {
@@ -114,22 +119,42 @@ export default function App() {
     if (dirty && !window.confirm('导入新照片会保留当前参数，是否继续？')) return;
     const next = URL.createObjectURL(file); setImageUrl(next); setIsSample(false); setFileName(file.name.replace(/\.[^.]+$/, '')); setNotice('照片已载入，原图不会上传');
   };
-  const saveCurrent = async (source: 'manual' | 'ai' = 'manual', suggested?: { name: string; description: string }) => {
-    const existing = userPresets.find((preset) => preset.id === selectedId && !preset.deletedAt);
-    const name = window.prompt('模板名称（最多 40 个字符）', resolvePresetDefaultName(existing, suggested))?.trim(); if (!name) return;
-    if (name.length > 40) return setNotice('模板名称不能超过 40 个字符');
-    const id = existing && window.confirm('覆盖当前模板？选择“取消”将另存为新模板。') ? existing.id : crypto.randomUUID();
-    const timestamp = new Date().toISOString();
-    let previewDataUrl = existing?.previewDataUrl;
-    try { previewDataUrl = await createPresetThumbnail(imageUrl, recipe); } catch { /* 模板仍可保存，预览回退到样片 */ }
-    const preset: Preset = { id, name, source, prompt: source === 'ai' ? prompt : undefined, description: suggested?.description || '自定义调色模板', tags: source === 'ai' ? ['AI 配方'] : ['自定义'], favorite: existing?.favorite || false, recipe, previewDataUrl, previewType: previewType as Preset['previewType'], createdAt: existing?.createdAt || timestamp, updatedAt: timestamp };
-    await savePreset(preset);
-    // Explicitly saving a template must persist the same recipe before an immediate reload.
-    await saveSession({ recipe, selectedId: id, prompt, previewType: previewType as Preset['previewType'],
-      recipeSource: source, aiDraft: source === 'ai' ? { name, description: preset.description || 'AI 调色模板' } : undefined });
-    setUserPresets((items) => [...items.filter((item) => item.id !== id), preset]); setSelectedId(id); setDirty(false); setTab('mine');
-    if (source === 'ai') setAiDraft({ name, description: preset.description || 'AI 调色模板' });
-    setNotice(`已保存「${name}」`);
+  const selectedUserPreset = userPresets.find((preset) => preset.id === selectedId && !preset.deletedAt);
+  const selectedBuiltinPreset = builtinPresets.find((preset) => preset.id === selectedId);
+  const persistCurrent = async (name: string, existing?: Preset) => {
+    if (saving) return;
+    const trimmed = name.trim();
+    if (!trimmed) return setNotice('请填写模板名称');
+    if (trimmed.length > 40) return setNotice('模板名称不能超过 40 个字符');
+    setSaving(true); setNotice('正在保存模板…');
+    try {
+      const timestamp = new Date().toISOString();
+      const source = recipeSource === 'ai' ? 'ai' : existing?.source === 'ai' ? 'ai' : 'manual';
+      let previewDataUrl = existing?.previewDataUrl;
+      try { previewDataUrl = await createPresetThumbnail(imageUrl, recipe); } catch { /* 样片不可读取时仍保存参数 */ }
+      const preset: Preset = { id: existing?.id || crypto.randomUUID(), name: trimmed, source,
+        prompt: source === 'ai' ? prompt : undefined,
+        description: source === 'ai' ? aiDraft?.description || existing?.description || 'AI 调色模板' : existing?.description || '自定义调色模板',
+        tags: existing?.tags || (source === 'ai' ? ['AI 配方'] : ['自定义']),
+        favorite: existing?.favorite || false, recipe: normalizeRecipe(recipe), previewDataUrl,
+        previewType: previewType as Preset['previewType'], createdAt: existing?.createdAt || timestamp, updatedAt: timestamp };
+      await savePreset(preset);
+      setUserPresets((items) => [...items.filter((item) => item.id !== preset.id), preset]);
+      setSelectedId(preset.id); setDirty(false); setTab('mine'); setSaveDialog(null);
+      setRecipeSource(source);
+      setAiDraft(source === 'ai' ? { name: trimmed, description: preset.description || 'AI 调色模板' } : undefined);
+      setNotice(`${existing ? '已更新' : '已保存新模板'}「${trimmed}」`);
+      try { await saveSession({ recipe: preset.recipe, selectedId: preset.id, prompt,
+        previewType: preset.previewType, recipeSource: source,
+        aiDraft: source === 'ai' ? { name: trimmed, description: preset.description || 'AI 调色模板' } : undefined }); }
+      catch { setNotice(`模板「${trimmed}」已保存，但当前会话未能保存`); }
+    } catch (error) { setNotice(`模板保存失败：${error instanceof Error ? error.message : '请检查浏览器本地存储'}`); }
+    finally { setSaving(false); }
+  };
+  const openSaveDialog = (mode: 'create' | 'save-as') => {
+    const baseName = selectedBuiltinPreset?.name || selectedUserPreset?.name;
+    setSaveDialog({ mode, name: mode === 'save-as' && baseName ? `${baseName.slice(0, 37)} 副本` : resolvePresetDefaultName(undefined, aiDraft) });
+    setNotice(mode === 'create' ? '请为当前参数命名并创建模板' : '请为当前参数命名并另存为模板');
   };
   const generateRecipe = async () => {
     if (aiBusy) return;
@@ -162,8 +187,26 @@ export default function App() {
   const recycle = async (preset: Preset) => { const next = { ...preset, deletedAt: new Date().toISOString() }; await savePreset(next); setUserPresets((items) => items.map((item) => item.id === next.id ? next : item)); setNotice('模板已移入回收站'); };
   const restore = async (preset: Preset) => { const { deletedAt: _deleted, ...next } = preset; await savePreset(next); setUserPresets((items) => items.map((item) => item.id === next.id ? next : item)); };
   const duplicate = async (preset: Preset) => {
-    const copy = cloneUserPreset(preset, crypto.randomUUID(), new Date().toISOString());
-    await savePreset(copy); setUserPresets((items) => [...items, copy]); setTab('mine'); setNotice(`已复制为「${copy.name}」`);
+    if (saving) return;
+    if (dirty && selectedId !== preset.id && !window.confirm('当前有未保存的调整，确认复制其他模板吗？')) return setNotice('已取消复制，当前调整已保留');
+    setSaving(true); setNotice('正在复制模板…');
+    try {
+      const copy = cloneUserPreset(preset, crypto.randomUUID(), new Date().toISOString());
+      copy.recipe = normalizeRecipe(selectedId === preset.id ? recipe : preset.recipe);
+      await savePreset(copy);
+      setUserPresets((items) => [...items, copy]); setTab('mine'); setSelectedId(copy.id);
+      setHistory([copy.recipe]); setCursor(0); setDirty(false);
+      setRecipeSource(copy.source === 'ai' ? 'ai' : 'manual');
+      setAiDraft(copy.source === 'ai' ? { name: copy.name, description: copy.description || 'AI 调色模板' } : undefined);
+      setNotice(`已复制并选中「${copy.name}」，调整后点击“保存为模板”可更新副本`);
+    } catch (error) { setNotice(`复制模板失败：${error instanceof Error ? error.message : '请检查浏览器本地存储'}`); }
+    finally { setSaving(false); }
+  };
+  const resetBuiltin = (preset: Preset) => {
+    if (selectedId !== preset.id && dirty && !window.confirm('当前有未保存的调整，确认切换并重置内置模板吗？')) return setNotice('已取消重置，当前调整已保留');
+    setSelectedId(preset.id); setHistory([preset.recipe]); setCursor(0); setDirty(false);
+    setRecipeSource('manual'); setAiDraft(undefined);
+    setNotice(`「${preset.name}」已恢复为内置初始样式`);
   };
   const rename = async (preset: Preset) => {
     const name = window.prompt('新的模板名称（最多 40 个字符）', preset.name)?.trim(); if (!name || name === preset.name) return;
@@ -193,7 +236,7 @@ export default function App() {
   const clearData = async () => { if (!window.confirm('确认清除全部自定义模板？此操作不可撤销。')) return; await clearPresetStore(); setUserPresets([]); setNotice('本地自定义模板已清除'); };
 
   return <main className="app-shell" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); importPhoto(event.dataTransfer.files[0]); }}>
-    <Topbar canUndo={cursor > 0} canRedo={cursor < history.length - 1} exporting={exporting} onUndo={() => setCursor((value) => Math.max(0, value - 1))} onRedo={() => setCursor((value) => Math.min(history.length - 1, value + 1))} onReset={() => { setRecipeSource('manual'); setAiDraft(undefined); pushRecipe(emptyRecipe); }} onImport={() => photoInput.current?.click()} onSave={() => void saveCurrent(recipeSource, aiDraft)} onExport={() => void exportImage()} />
+    <Topbar canUndo={cursor > 0} canRedo={cursor < history.length - 1} exporting={exporting} saving={saving} presetsReady={presetsReady} onUndo={() => setCursor((value) => Math.max(0, value - 1))} onRedo={() => setCursor((value) => Math.min(history.length - 1, value + 1))} onReset={() => { setRecipeSource('manual'); setAiDraft(undefined); pushRecipe(emptyRecipe); }} onImport={() => photoInput.current?.click()} onSave={() => selectedUserPreset ? void persistCurrent(selectedUserPreset.name, selectedUserPreset) : openSaveDialog('save-as')} onExport={() => void exportImage()} />
     <input ref={photoInput} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => importPhoto(event.target.files?.[0])} />
     <input ref={presetInput} hidden type="file" accept="application/json" onChange={(event) => void importPresets(event.target.files?.[0])} />
     <div className="workspace">
@@ -210,7 +253,8 @@ export default function App() {
               <span className={`preset-thumb tone-${index % 6}`}>{preset.previewDataUrl ? <img src={presetPreviewUrl(preset.previewDataUrl)} alt="" /> : null}</span><span><strong>{preset.name}</strong><small>{preset.source === 'ai' ? chineseExplanation(preset.description || '', '自然调色配方，可结合原图继续微调。') : preset.description}</small></span>
             </button>
             <span className="preset-actions">
-              <button aria-label={`复制 ${preset.name}`} title="复制模板" onClick={() => void duplicate(preset)}><Copy size={15} /></button>
+              <button aria-label={`复制 ${preset.name}`} title="复制模板" disabled={!presetsReady || saving} onClick={() => void duplicate(preset)}><Copy size={15} /></button>
+              {preset.source === 'builtin' ? <button aria-label={`重置内置模板 ${preset.name}`} title="恢复内置初始样式" onClick={() => resetBuiltin(preset)}><RotateCcw size={15} /></button> : null}
               {preset.source !== 'builtin' ? <button aria-label={`重命名 ${preset.name}`} title="重命名模板" onClick={() => void rename(preset)}><Pencil size={15} /></button> : null}
               {preset.source !== 'builtin' ? <button aria-label={`${preset.favorite ? '取消收藏' : '收藏'} ${preset.name}`} title="收藏模板" onClick={() => void toggleFavorite(preset)}><Heart className={preset.favorite ? 'filled' : ''} size={15} /></button> : null}
               {preset.source !== 'builtin' ? <button aria-label={`删除 ${preset.name}`} title="移入回收站" onClick={() => void recycle(preset)}><Trash2 size={15} /></button> : null}
@@ -219,6 +263,7 @@ export default function App() {
           {activePresets.length === 0 ? <div className="empty-list">这里还没有模板</div> : null}
         </div>
         <div className="library-tools">
+          <button disabled={!presetsReady || saving} onClick={() => openSaveDialog('create')}><Plus size={15} />新建模板</button>
           <button onClick={() => presetInput.current?.click()}><FileUp size={15} />导入模板</button>
           <button onClick={() => downloadJson(userPresets.filter((item) => !item.deletedAt), '光调模板备份.json')}><FileDown size={15} />备份</button>
           <button onClick={() => setRecycleOpen(true)}><Trash2 size={15} />回收站 {recycled.length || ''}</button>
@@ -261,7 +306,13 @@ export default function App() {
         </section>
       </aside>
     </div>
-    <footer className="statusbar"><span className="status-dot" />{notice}<span className="status-spacer" /><button onClick={clearData}><Settings2 size={13} />清除本地数据</button></footer>
+    <footer className="statusbar" aria-live="polite"><span className="status-dot" />{notice}<span className="status-spacer" /><button onClick={clearData}><Settings2 size={13} />清除本地数据</button></footer>
+    {saveDialog ? <div className="modal-backdrop" role="presentation"><form className="modal preset-save-dialog" role="dialog" aria-modal="true" aria-labelledby="preset-save-title" onSubmit={(event) => { event.preventDefault(); void persistCurrent(saveDialog.name); }}>
+      <header><h2 id="preset-save-title">{saveDialog.mode === 'create' ? '新建模板' : '另存为新模板'}</h2><button type="button" aria-label="关闭模板保存窗口" onClick={() => { setSaveDialog(null); setNotice('已取消保存，当前调整已保留'); }}><X size={18} /></button></header>
+      <p>将当前已调整的全部参数保存为可复用模板。</p>
+      <label htmlFor="preset-name">模板名称</label><input id="preset-name" autoFocus disabled={saving} maxLength={40} value={saveDialog.name} onChange={(event) => setSaveDialog((current) => current ? { ...current, name: event.target.value } : null)} />
+      <div className="preset-save-actions"><button type="button" onClick={() => { setSaveDialog(null); setNotice('已取消保存，当前调整已保留'); }}>取消</button><button type="submit" disabled={saving || !saveDialog.name.trim()}>{saving ? '保存中…' : '保存新模板'}</button></div>
+    </form></div> : null}
     {recycleOpen ? <div className="modal-backdrop" role="presentation"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="recycle-title"><header><h2 id="recycle-title">模板回收站</h2><button aria-label="关闭回收站" onClick={() => setRecycleOpen(false)}><X size={18} /></button></header>{recycled.length ? recycled.map((preset) => <div className="recycle-row" key={preset.id}><span>{preset.name}</span><span className="recycle-actions"><button onClick={() => void restore(preset)}><ArchiveRestore size={15} />恢复</button><button className="danger" onClick={() => void permanentlyDelete(preset)}><Trash2 size={15} />永久删除</button></span></div>) : <p className="empty-list">回收站为空</p>}</section></div> : null}
   </main>;
 }

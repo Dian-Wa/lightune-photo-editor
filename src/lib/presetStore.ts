@@ -20,7 +20,8 @@ export async function loadUserPresets(): Promise<Preset[]> {
 
 export async function savePreset(preset: Preset) {
   const db = await database();
-  if (db) await db.put(storeName, preset);
+  if (!db) throw new Error('当前浏览器不支持本地模板存储');
+  await db.put(storeName, preset);
 }
 
 export async function deletePreset(id: string) {
