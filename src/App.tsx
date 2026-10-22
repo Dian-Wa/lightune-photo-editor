@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArchiveRestore, Copy, Download, FileDown, FileUp, Heart, ImagePlus,
-  Pencil, Plus, RotateCcw, RotateCw, Save, Search, Settings2, Sparkles,
+  ArchiveRestore, Copy, Crop, Download, FileDown, FileUp, Heart, ImagePlus,
+  LayoutTemplate, Pencil, Plus, RotateCcw, RotateCw, Save, Search, Settings2, SlidersHorizontal, Sparkles, WandSparkles,
   Trash2, Undo2, Upload, X,
 } from 'lucide-react';
 import PhotoCanvas, { createPresetThumbnail, exportAdjustedImage } from './components/PhotoCanvas';
 import AdjustmentPanel from './components/AdjustmentPanel';
+import CropTools from './components/CropTools';
 import { builtinPresets, cloneUserPreset, renameUserPreset, resolvePresetDefaultName } from './domain/presets';
 import { emptyRecipe, normalizeRecipe, type AdjustmentRecipe, type Preset, type RecipeKey } from './domain/recipe';
 import { clearPresetStore, deletePreset, loadSession, loadUserPresets, parsePresetBackup, savePreset, savePresetBatch, saveSession } from './lib/presetStore';
@@ -13,9 +14,11 @@ import { calculateOutputSize, estimateEncodedBytes } from './lib/imageMath';
 import { aiAvailable, presetPreviewUrl, recipeApiUrl, sampleImageUrl } from './lib/deployment';
 import { loadAiSettings, rememberAiSettings, requestDirectRecipe } from './lib/directAi';
 import { recipeExplanationMessage, chineseExplanation } from './domain/recipeExplanation';
+import { cropSourceRect, fitCropToAspect, fullCrop, normalizeCrop, type CropRect } from './lib/crop';
 
 const sampleNames: Record<Preset['previewType'], string> = { portrait: '内置旅行人像样片', landscape: '内置风景样片', food: '内置美食样片', indoor: '内置室内样片' };
 type Tab = 'builtin' | 'mine' | 'favorite';
+type MobileTool = 'none' | 'filter' | 'template' | 'adjust' | 'crop' | 'ai' | 'export';
 type ExportFormat = 'jpeg' | 'png' | 'webp';
 
 const downloadJson = (value: unknown, name: string) => {
@@ -50,6 +53,12 @@ export default function App() {
   const aiController = useRef<AbortController | null>(null);
   useEffect(() => () => aiController.current?.abort(), []);
   const [tab, setTab] = useState<Tab>('builtin');
+  const [mobileTool, setMobileTool] = useState<MobileTool>('filter');
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && Boolean(window.matchMedia?.('(max-width: 800px)').matches));
+  const [crop, setCrop] = useState<CropRect>(fullCrop);
+  const [cropDraft, setCropDraft] = useState<CropRect>(fullCrop);
+  const [cropAspect, setCropAspect] = useState<number | null>(null);
+  const [cropEditing, setCropEditing] = useState(false);
   const [query, setQuery] = useState('');
   const [userPresets, setUserPresets] = useState<Preset[]>([]);
   const [presetsReady, setPresetsReady] = useState(false);
@@ -77,6 +86,19 @@ export default function App() {
   const [imageSize, setImageSize] = useState<{ width: number; height: number }>();
   const photoInput = useRef<HTMLInputElement>(null);
   const presetInput = useRef<HTMLInputElement>(null);
+  const aiDetails = useRef<HTMLDetailsElement>(null);
+
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const media = window.matchMedia('(max-width: 800px)');
+    const sync = () => {
+      setIsMobile(media.matches);
+      if (aiDetails.current) aiDetails.current.open = !media.matches;
+    };
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
 
   useEffect(() => {
     void Promise.all([loadUserPresets(), loadSession()]).then(([presets, session]) => {
@@ -105,7 +127,8 @@ export default function App() {
     return needle ? pool.filter((preset) => `${preset.name} ${preset.tags.join(' ')}`.toLowerCase().includes(needle)) : pool;
   }, [query, tab, userPresets]);
   const recycled = userPresets.filter((preset) => preset.deletedAt);
-  const outputSize = imageSize ? calculateOutputSize(imageSize.width, imageSize.height, maxEdge) : undefined;
+  const croppedPixels = imageSize ? cropSourceRect(imageSize.width, imageSize.height, crop) : undefined;
+  const outputSize = croppedPixels ? calculateOutputSize(croppedPixels.width, croppedPixels.height, maxEdge) : undefined;
   const estimatedBytes = outputSize ? estimateEncodedBytes(outputSize.width, outputSize.height, format, quality / 100) : undefined;
 
   const selectPreset = (preset: Preset) => {
@@ -117,7 +140,7 @@ export default function App() {
     if (!file.type.startsWith('image/')) return setNotice('请选择 JPG、PNG 或 WebP 图片');
     if (file.size > 20 * 1024 * 1024) return setNotice('图片不能超过 20MB');
     if (dirty && !window.confirm('导入新照片会保留当前参数，是否继续？')) return;
-    const next = URL.createObjectURL(file); setImageUrl(next); setIsSample(false); setFileName(file.name.replace(/\.[^.]+$/, '')); setNotice('照片已载入，原图不会上传');
+    const next = URL.createObjectURL(file); setImageUrl(next); setIsSample(false); setFileName(file.name.replace(/\.[^.]+$/, '')); setCrop(fullCrop); setCropDraft(fullCrop); setCropAspect(null); setCropEditing(false); setNotice('照片已载入，原图不会上传');
   };
   const selectedUserPreset = userPresets.find((preset) => preset.id === selectedId && !preset.deletedAt);
   const selectedBuiltinPreset = builtinPresets.find((preset) => preset.id === selectedId);
@@ -131,7 +154,7 @@ export default function App() {
       const timestamp = new Date().toISOString();
       const source = recipeSource === 'ai' ? 'ai' : existing?.source === 'ai' ? 'ai' : 'manual';
       let previewDataUrl = existing?.previewDataUrl;
-      try { previewDataUrl = await createPresetThumbnail(imageUrl, recipe); } catch { /* 样片不可读取时仍保存参数 */ }
+      try { previewDataUrl = await createPresetThumbnail(imageUrl, recipe, crop); } catch { /* 样片不可读取时仍保存参数 */ }
       const preset: Preset = { id: existing?.id || crypto.randomUUID(), name: trimmed, source,
         prompt: source === 'ai' ? prompt : undefined,
         description: source === 'ai' ? aiDraft?.description || existing?.description || 'AI 调色模板' : existing?.description || '自定义调色模板',
@@ -224,7 +247,7 @@ export default function App() {
     if (exporting) return;
     setExporting(true);
     setNotice('正在按原始分辨率处理…');
-    try { const result = await exportAdjustedImage(imageUrl, recipe, { format, quality: quality / 100, maxEdge, name: fileName }); setNotice(`导出完成 · ${result.width}×${result.height} · ${(result.bytes / 1024 / 1024).toFixed(1)}MB`); }
+    try { const result = await exportAdjustedImage(imageUrl, recipe, { format, quality: quality / 100, maxEdge, name: fileName, crop }); setNotice(`导出完成 · ${result.width}×${result.height} · ${(result.bytes / 1024 / 1024).toFixed(1)}MB`); }
     catch (error) { setNotice(error instanceof Error ? error.message : '导出失败'); }
     finally { setExporting(false); }
   };
@@ -234,8 +257,16 @@ export default function App() {
     catch (error) { setNotice(error instanceof Error ? error.message : '导入失败'); }
   };
   const clearData = async () => { if (!window.confirm('确认清除全部自定义模板？此操作不可撤销。')) return; await clearPresetStore(); setUserPresets([]); setNotice('本地自定义模板已清除'); };
+  const selectMobileTool = (tool: Exclude<MobileTool, 'none'>) => {
+    if (mobileTool === tool) { setMobileTool('none'); setCropEditing(false); return; }
+    setMobileTool(tool);
+    if (tool === 'filter') setTab('builtin');
+    if (tool === 'template') setTab('mine');
+    if (tool === 'crop') { setCropDraft(crop); setCropEditing(true); }
+    else setCropEditing(false);
+  };
 
-  return <main className="app-shell" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); importPhoto(event.dataTransfer.files[0]); }}>
+  return <main className="app-shell" data-mobile-tool={mobileTool} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); importPhoto(event.dataTransfer.files[0]); }}>
     <Topbar canUndo={cursor > 0} canRedo={cursor < history.length - 1} exporting={exporting} saving={saving} presetsReady={presetsReady} onUndo={() => setCursor((value) => Math.max(0, value - 1))} onRedo={() => setCursor((value) => Math.min(history.length - 1, value + 1))} onReset={() => { setRecipeSource('manual'); setAiDraft(undefined); pushRecipe(emptyRecipe); }} onImport={() => photoInput.current?.click()} onSave={() => selectedUserPreset ? void persistCurrent(selectedUserPreset.name, selectedUserPreset) : openSaveDialog('save-as')} onExport={() => void exportImage()} />
     <input ref={photoInput} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => importPhoto(event.target.files?.[0])} />
     <input ref={presetInput} hidden type="file" accept="application/json" onChange={(event) => void importPresets(event.target.files?.[0])} />
@@ -267,13 +298,16 @@ export default function App() {
           <button onClick={() => presetInput.current?.click()}><FileUp size={15} />导入模板</button>
           <button onClick={() => downloadJson(userPresets.filter((item) => !item.deletedAt), '光调模板备份.json')}><FileDown size={15} />备份</button>
           <button onClick={() => setRecycleOpen(true)}><Trash2 size={15} />回收站 {recycled.length || ''}</button>
+          <button className="mobile-clear" onClick={clearData}><Settings2 size={15} />清除数据</button>
         </div>
       </aside>
-      <PhotoCanvas imageUrl={imageUrl} recipe={recipe} fileName={fileName} onImageInfo={setImageSize} />
+      <PhotoCanvas imageUrl={imageUrl} recipe={recipe} fileName={fileName} crop={crop}
+        cropEditing={isMobile && mobileTool === 'crop' && cropEditing} cropDraft={cropDraft}
+        onCropDraftChange={setCropDraft} onImageInfo={setImageSize} />
       <aside className="inspector">
         <section className="ai-panel">
           <div className="section-title"><Sparkles size={18} /><h2>AI 调色灵感</h2></div>
-          <details className="ai-connection" open>
+          <details className="ai-connection" ref={aiDetails} open>
             <summary>AI 服务配置</summary>
             <fieldset disabled={aiBusy}>
               <label>调用方式<select aria-label="AI 调用方式" value={aiMode} onChange={(event) => setAiMode(event.target.value as 'direct' | 'proxy')}><option value="direct">浏览器直连（自备密钥）</option><option value="proxy" disabled={!proxyAvailable}>原有代理{!proxyAvailable ? '（未配置）' : ''}</option></select></label>
@@ -297,6 +331,12 @@ export default function App() {
           {aiMessage ? <p className="ai-result" role="status">{aiMessage}</p> : null}
         </section>
         <AdjustmentPanel recipe={recipe} dirty={dirty} onFieldChange={updateField} onRecipeChange={pushRecipe} />
+        <CropTools sourceSize={imageSize} crop={crop} draft={cropDraft} aspect={cropAspect} editing={cropEditing}
+          onDraftChange={setCropDraft} onAspectChange={setCropAspect}
+          onEdit={() => { setCropDraft(crop); setCropEditing(true); }}
+          onApply={() => { setCrop(normalizeCrop(cropDraft)); setCropEditing(false); setMobileTool('none'); setNotice('裁剪已应用到预览和导出'); }}
+          onCancel={() => { setCropDraft(crop); setCropEditing(false); setMobileTool('none'); setNotice('已取消本次裁剪'); }}
+          onReset={() => { setCrop(fullCrop); setCropDraft(fullCrop); setCropAspect(null); setMobileTool('none'); setNotice('已还原完整照片'); }} />
         <section className="export-settings">
           <div className="section-title"><Download size={17} /><h2>导出设置</h2></div>
           <div className="export-grid"><label>格式<select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}><option value="jpeg">JPG</option><option value="png">PNG</option><option value="webp">WebP</option></select></label><label>质量<select value={quality} onChange={(event) => setQuality(Number(event.target.value))}><option value="70">标准 70%</option><option value="90">高 90%</option><option value="100">最高 100%</option></select></label></div>
@@ -307,6 +347,14 @@ export default function App() {
       </aside>
     </div>
     <footer className="statusbar" aria-live="polite"><span className="status-dot" />{notice}<span className="status-spacer" /><button onClick={clearData}><Settings2 size={13} />清除本地数据</button></footer>
+    <nav className="mobile-tools" role="tablist" aria-label="手机编辑工具">
+      {([
+        ['filter', '滤镜', WandSparkles], ['template', '模板', LayoutTemplate],
+        ['adjust', '调色', SlidersHorizontal], ['crop', '裁剪', Crop],
+        ['ai', 'AI', Sparkles], ['export', '导出', Download],
+      ] as const).map(([tool, label, Icon]) => <button key={tool} type="button" role="tab"
+        aria-selected={mobileTool === tool} onClick={() => selectMobileTool(tool)}><Icon size={20} /><span>{label}</span></button>)}
+    </nav>
     {saveDialog ? <div className="modal-backdrop" role="presentation"><form className="modal preset-save-dialog" role="dialog" aria-modal="true" aria-labelledby="preset-save-title" onSubmit={(event) => { event.preventDefault(); void persistCurrent(saveDialog.name); }}>
       <header><h2 id="preset-save-title">{saveDialog.mode === 'create' ? '新建模板' : '另存为新模板'}</h2><button type="button" aria-label="关闭模板保存窗口" onClick={() => { setSaveDialog(null); setNotice('已取消保存，当前调整已保留'); }}><X size={18} /></button></header>
       <p>将当前已调整的全部参数保存为可复用模板。</p>
