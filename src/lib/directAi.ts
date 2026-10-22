@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { controlDefinitions, normalizeRecipe, recipeKeys, recipeModules } from '../domain/recipe';
+import { chineseExplanationInstruction, localizeRecipeExplanation } from '../domain/recipeExplanation';
 
 export type DirectAiConfig = { baseUrl: string; apiKey: string; model: string; jsonMode: boolean };
 export const defaultAiConfig: DirectAiConfig = { baseUrl: '', apiKey: '', model: '', jsonMode: false };
@@ -40,7 +41,7 @@ export function parseDirectRecipe(content: unknown) {
     const text = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     const parsed = resultSchema.parse(JSON.parse(text));
     if (!recipeKeys.some((key) => Object.hasOwn(parsed.recipe, key))) throw new Error();
-    return { ...parsed, recipe: normalizeRecipe(parsed.recipe) };
+    return localizeRecipeExplanation({ ...parsed, recipe: normalizeRecipe(parsed.recipe) });
   } catch { throw new Error('AI 返回的配方格式无效，请重试或更换模型'); }
 }
 
@@ -68,7 +69,7 @@ export async function requestDirectRecipe(config: DirectAiConfig, prompt: string
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey.trim()}` },
       body: JSON.stringify({ model: config.model.trim(), temperature: 0.3, stream: false,
         ...(config.jsonMode ? { response_format: { type: 'json_object' } } : {}),
-        messages: [{ role: 'system', content: systemPrompt(previewType) }, { role: 'user', content: prompt.trim() }] }),
+        messages: [{ role: 'system', content: `${systemPrompt(previewType)}\n${chineseExplanationInstruction}` }, { role: 'user', content: prompt.trim() }] }),
     });
     if (!response.ok) {
       const messages: Record<number, string> = { 400: '请求参数不被服务支持，请核对模型并尝试关闭 JSON 模式',

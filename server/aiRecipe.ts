@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { controlDefinitions, normalizeRecipe, recipeKeys, recipeModules } from '../src/domain/recipe.ts';
+import { chineseExplanationInstruction, localizeRecipeExplanation } from '../src/domain/recipeExplanation.ts';
 
 const responseSchema = z.object({
   name: z.string().trim().min(1).max(40),
@@ -11,7 +12,7 @@ const responseSchema = z.object({
 export function parseModelRecipe(text: string) {
   try {
     const parsed = responseSchema.parse(JSON.parse(text));
-    return { ...parsed, recipe: normalizeRecipe(parsed.recipe) };
+    return localizeRecipeExplanation({ ...parsed, recipe: normalizeRecipe(parsed.recipe) });
   } catch { throw new Error('AI 返回格式无效'); }
 }
 
@@ -34,7 +35,7 @@ export async function requestRecipe(prompt: string, previewType: string) {
       const response = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model, temperature: 0.3, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] }),
+        body: JSON.stringify({ model, temperature: 0.3, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: `${system}\n${chineseExplanationInstruction}` }, { role: 'user', content: prompt }] }),
       });
       if (!response.ok) throw new Error(response.status === 401 ? 'AI 密钥无效' : `AI 服务暂时不可用（${response.status}）`);
       const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
