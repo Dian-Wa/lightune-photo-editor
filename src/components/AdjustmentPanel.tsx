@@ -1,7 +1,7 @@
 import { useState, type CSSProperties } from 'react';
-import { ChevronDown, RotateCcw, Settings2 } from 'lucide-react';
+import { RotateCcw, Settings2 } from 'lucide-react';
 import { colorBands, controlDefinitions, recipeKeys, recipeModules, resetRecipeModule,
-  type AdjustmentRecipe, type ColorBand, type RecipeKey } from '../domain/recipe';
+  type AdjustmentRecipe, type ColorBand, type ModuleId, type RecipeKey } from '../domain/recipe';
 import CurveEditor from './CurveEditor';
 import NumericInput from './NumericInput';
 
@@ -19,28 +19,41 @@ function AdjustmentSlider({ field, value, onChange }: { field: RecipeKey; value:
 }
 
 const adjustmentCount = recipeKeys.filter((key) => !key.endsWith('Enabled')).length;
+const adjustmentNavigation = [
+  { id: 'strength', label: controlDefinitions.strength.label, moduleId: undefined },
+  ...recipeModules.flatMap<{ id: string; label: string; moduleId: ModuleId }>((module) => module.advanced
+    ? [{ id: module.id, label: module.name, moduleId: module.id }]
+    : module.keys.map((key) => ({ id: key, label: controlDefinitions[key].label, moduleId: module.id }))),
+];
 
 export default function AdjustmentPanel({ recipe, dirty, onFieldChange, onRecipeChange }: Props) {
   const [color, setColor] = useState<ColorBand>('Red');
+  const [activeCategory, setActiveCategory] = useState('brightness');
+  const activeEntry = adjustmentNavigation.find((entry) => entry.id === activeCategory)!;
   return <section className="adjustments" aria-label="调整参数面板">
     <div className="section-heading"><Settings2 size={17} /><h2>手动调整</h2><span className={dirty ? 'unsaved' : ''}>{dirty ? '有未保存的调整' : '已保存'}</span></div>
-    <div className="strength"><AdjustmentSlider field="strength" value={recipe.strength} onChange={onFieldChange} /></div>
-    <p className="adjustment-guide">{adjustmentCount} 项调整 · 专业工具可展开细调</p>
+    <nav className="adjustment-navigation" aria-label="调色类别">
+      {adjustmentNavigation.map((entry) => <button key={entry.id} type="button"
+        aria-pressed={activeCategory === entry.id} aria-controls={`adjustment-category-${entry.id}`}
+        onClick={() => setActiveCategory(entry.id)}>{entry.label}</button>)}
+    </nav>
+    <p className="adjustment-guide">{adjustmentNavigation.length} 个类别 · {adjustmentCount} 项调整 · 当前：{activeEntry.label}</p>
+    <div className="strength" id="adjustment-category-strength" hidden={activeCategory !== 'strength'}><AdjustmentSlider field="strength" value={recipe.strength} onChange={onFieldChange} /></div>
     {recipeModules.map((module) => {
       const enabled = recipe[module.enabledKey] === 1;
       const modified = module.keys.some((key) => recipe[key] !== controlDefinitions[key].defaultValue);
-      return <details className={`adjustment-module ${enabled ? '' : 'module-bypassed'}`} key={module.id} open={!module.advanced} data-module={module.id}>
-        <summary>
-          <span className="module-title">{module.name}{modified ? <i className="module-changed" title="该模块已调整" /> : null}</span>
+      return <div className={`adjustment-module ${enabled ? '' : 'module-bypassed'}`} key={module.id} hidden={activeEntry.moduleId !== module.id} data-module={module.id}
+        id={module.advanced ? `adjustment-category-${module.id}` : undefined}>
+        <div className="category-heading">
+          <span className="module-title">{module.name}设置{modified ? <i className="module-changed" title="该模块已调整" /> : null}</span>
           <span className="module-actions">
             <button type="button" className="module-switch" role="switch" aria-label={`启用${module.name}`} aria-checked={enabled}
               title={enabled ? '暂时关闭效果，保留参数' : '重新启用效果'}
               onClick={(event) => { event.preventDefault(); event.stopPropagation(); onFieldChange(module.enabledKey, enabled ? 0 : 1); }}>{enabled ? '开启' : '关闭'}</button>
             <button type="button" className="module-reset" aria-label={`重置${module.name}`} title="仅重置该模块"
               onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRecipeChange(resetRecipeModule(recipe, module.id)); }}><RotateCcw size={13} /></button>
-            <ChevronDown className="module-chevron" size={14} />
           </span>
-        </summary>
+        </div>
         <fieldset disabled={!enabled} className="module-fields">
           <p className="module-hint">{module.hint}</p>
           {module.id === 'hsl' ? <>
@@ -54,9 +67,9 @@ export default function AdjustmentPanel({ recipe, dirty, onFieldChange, onRecipe
               return <AdjustmentSlider key={key} field={key} value={recipe[key]} onChange={onFieldChange} />;
             })}
           </> : module.id === 'curves' ? <CurveEditor recipe={recipe} disabled={!enabled} onChange={onFieldChange} />
-            : module.keys.map((key) => <AdjustmentSlider key={key} field={key} value={recipe[key]} onChange={onFieldChange} />)}
+            : module.keys.map((key) => <div key={key} id={module.advanced ? undefined : `adjustment-category-${key}`} hidden={!module.advanced && activeCategory !== key}><AdjustmentSlider field={key} value={recipe[key]} onChange={onFieldChange} /></div>)}
         </fieldset>
-      </details>;
+      </div>;
     })}
   </section>;
 }
