@@ -14,6 +14,7 @@ export const builtinPresets: Preset[] = [
   make('cinema', '冷调电影', '冷色阴影与收敛饱和度', { exposure: -3, contrast: 18, highlights: -20, shadows: -8, temperature: -20, saturation: -12, vignette: 14 }, ['电影', '冷色']),
   make('japanese', '日系柔和', '低反差、明亮而克制', { brightness: 8, contrast: -18, highlights: -10, shadows: 22, temperature: 6, softness: 10 }, ['日系', '柔和']),
   make('food', '食物增色', '增强暖色与食物质感', { contrast: 10, saturation: 12, vibrance: 20, temperature: 12, sharpen: 12 }, ['美食', '鲜明']),
+  make('mono','经典黑白','干净黑白与适度对比',{blackWhiteMix:100,contrast:12,highlights:-8},['黑白']),
 ];
 
 builtinPresets[5] = { ...builtinPresets[5], previewType: 'food', previewDataUrl: sampleImageUrl('food') };

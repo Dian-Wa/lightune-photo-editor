@@ -126,6 +126,7 @@ export const presetSchema = z.object({
   tags: z.array(z.string().max(20)).max(10),
   favorite: z.boolean(),
   recipe: z.record(z.string(), z.number()),
+  filter: z.object({ id:z.string(),name:z.string(),recipe:z.record(z.string(),z.number()),strength:z.number().min(0).max(100) }).optional(),
   previewType: z.enum(['portrait', 'landscape', 'food', 'indoor']),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -133,4 +134,4 @@ export const presetSchema = z.object({
   previewDataUrl: z.string().max(500_000).optional(),
 });
 
-export type Preset = Omit<z.infer<typeof presetSchema>, 'recipe'> & { recipe: AdjustmentRecipe };
+export type Preset = Omit<z.infer<typeof presetSchema>, 'recipe'|'filter'> & { recipe: AdjustmentRecipe; filter?: {id:string;name:string;recipe:AdjustmentRecipe;strength:number} };

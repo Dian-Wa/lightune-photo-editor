@@ -6,7 +6,7 @@ import { builtinPresets } from '../domain/presets';
 describe('applyRecipeToPixels', () => {
   it('preserves all six builtin looks when advanced controls remain at defaults', () => {
     const input = new Uint8ClampedArray([20, 40, 60, 200, 120, 90, 70, 255, 220, 230, 240, 128]);
-    expect(builtinPresets.map((preset) => Array.from(applyRecipeToPixels(input, preset.recipe, 3, 1)))).toEqual([
+    expect(builtinPresets.slice(0,6).map((preset) => Array.from(applyRecipeToPixels(input, preset.recipe, 3, 1)))).toEqual([
       [39, 60, 82, 200, 135, 103, 82, 255, 217, 227, 238, 128],
       [35, 44, 57, 200, 136, 94, 66, 255, 236, 234, 237, 128],
       [42, 53, 63, 200, 130, 101, 81, 255, 195, 198, 201, 128],

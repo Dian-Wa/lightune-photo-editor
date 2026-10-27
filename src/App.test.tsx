@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as mount, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import * as presetStore from './lib/presetStore';
+const render=(element:React.ReactNode)=>{const result=mount(element);fireEvent.click(screen.getByRole('button',{name:'体验样片'}));fireEvent.click(within(screen.getByLabelText('调整参数面板')).getByRole('button',{name:'全部'}));return result;};
 
 beforeEach(() => {
   const values: Record<string, string> = {};
@@ -11,6 +12,58 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('photo editor workspace', () => {
+  it('retains current editing when draft storage is full',async()=>{
+    vi.spyOn(presetStore,'saveDraft').mockRejectedValue(new Error('本地空间不足'));
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(new Uint8Array([1,2,3]))));
+    render(<App/>);
+    fireEvent.change(screen.getByLabelText('亮度'),{target:{value:'29'}});
+    fireEvent.click(screen.getByRole('tab',{name:'更多'}));
+    fireEvent.click(screen.getByRole('button',{name:'保存草稿'}));
+    await waitFor(()=>expect(screen.getByText('草稿保存失败，当前编辑已保留：本地空间不足')).toBeInTheDocument());
+    expect(screen.getByLabelText('亮度')).toHaveValue('29');
+  });
+  it('does not apply an AI response after cancelling its tool',async()=>{
+    let respond!:(response:Response)=>void;
+    vi.stubGlobal('fetch',vi.fn(()=>new Promise<Response>(resolve=>{respond=resolve;})));
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab',{name:'AI'}));
+    fireEvent.change(screen.getByLabelText('AI 接口地址'),{target:{value:'https://example.com/v1'}});
+    fireEvent.change(screen.getByLabelText('AI API 密钥'),{target:{value:'test-only'}});
+    fireEvent.change(screen.getByLabelText('AI 模型名称'),{target:{value:'test-model'}});
+    fireEvent.click(screen.getByRole('button',{name:'生成配方'}));
+    fireEvent.click(screen.getByRole('button',{name:'取消本工具调整'}));
+    respond(new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({name:'不应应用',description:'取消后的结果',recipe:{brightness:77}})}}]})));
+    await waitFor(()=>expect(screen.getByRole('button',{name:'生成配方'})).toBeEnabled());
+    expect(screen.getByLabelText('亮度')).toHaveValue('0');
+  });
+  it('opens a lightweight home before the editor',()=>{
+    mount(<App/>);
+    expect(screen.getByRole('button',{name:'导入照片'})).toBeInTheDocument();
+    expect(screen.queryByRole('region',{name:'照片编辑画布'})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'体验样片'}));
+    expect(screen.getByRole('region',{name:'照片编辑画布'})).toBeInTheDocument();
+  });
+  it('cancels a tool back to its entry state and keeps template switching undoable',()=>{
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab',{name:'调节'}));
+    fireEvent.change(screen.getByLabelText('亮度'),{target:{value:'31'}});
+    fireEvent.click(screen.getByRole('button',{name:'取消本工具调整'}));
+    expect(screen.getByLabelText('亮度')).toHaveValue('0');
+    fireEvent.click(screen.getByRole('button',{name:'暖肤人像 柔暖肤色与轻微柔化'}));
+    expect(screen.getByRole('slider',{name:'滤镜强度'})).toBeEnabled();
+    fireEvent.click(screen.getByRole('button',{name:'撤销'}));
+    expect(screen.getByRole('slider',{name:'滤镜强度'})).toBeDisabled();
+  });
+  it('commits a continuous slider gesture as one undo step',()=>{
+    render(<App/>);
+    const slider=screen.getByLabelText('亮度');
+    fireEvent.pointerDown(slider);
+    fireEvent.change(slider,{target:{value:'10'}});fireEvent.change(slider,{target:{value:'30'}});
+    fireEvent.pointerUp(slider);
+    expect(slider).toHaveValue('30');
+    fireEvent.click(screen.getByRole('button',{name:'撤销'}));
+    expect(slider).toHaveValue('0');
+  });
   it('offers direct AI configuration on Pages while keeping manual editing usable', () => {
     vi.stubEnv('VITE_STATIC_MODE', 'true');
     render(<App />);
@@ -58,7 +111,7 @@ describe('photo editor workspace', () => {
     expect(screen.getByText('清透自然')).toBeInTheDocument();
     expect(screen.getByText('AI 调色灵感')).toBeInTheDocument();
     expect(screen.getByLabelText('亮度')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /导出/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存' })).toBeInTheDocument();
   });
 
   it('marks the recipe as edited after a manual adjustment', () => {

@@ -5,6 +5,12 @@ const preset = { id: 'saved', name: '专业模板', source: 'manual', tags: ['�
   previewType: 'portrait', createdAt: '2026-10-12', updatedAt: '2026-10-12' };
 
 describe('professional preset backups', () => {
+  it('preserves independent filter strength without storing image composition in a template',()=>{
+    const [restored]=parsePresetBackup(JSON.stringify([{...preset,recipe:{brightness:14},filter:{id:'film',name:'胶片',recipe:{contrast:-20},strength:36},composition:{rotation:1}}]));
+    expect(restored.filter?.strength).toBe(36);
+    expect(restored.filter?.recipe.contrast).toBe(-20);
+    expect(restored).not.toHaveProperty('composition');
+  });
   it('loads legacy backups with neutral new controls', () => {
     const [restored] = parsePresetBackup(JSON.stringify([{ ...preset, recipe: { brightness: 8, grain: 20 } }]));
     expect(restored.recipe).toMatchObject({ brightness: 8, grain: 20, grainSize: 0,

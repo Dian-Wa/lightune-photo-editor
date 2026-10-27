@@ -4,9 +4,11 @@ import type { AdjustmentRecipe } from '../domain/recipe';
 import { applyRecipeToPixels, assertSafePixelCount, calculateOutputSize } from '../lib/imageMath';
 import { cropSourceRect, fullCrop, type CropRect } from '../lib/crop';
 import CropOverlay from './CropOverlay';
+import { defaultComposition, straightenScale, transformedSize, type Composition, type FilterState } from '../domain/editorDocument';
 
 type Props = { imageUrl: string; recipe: AdjustmentRecipe; fileName: string; crop?: CropRect;
   cropEditing?: boolean; cropDraft?: CropRect; cropAspect?: number | null; onCropDraftChange?: (crop: CropRect) => void;
+  composition?: Composition; filter?: FilterState | null;
   onImageInfo?: (size: { width: number; height: number }) => void };
 
 async function loadImage(url: string) {
@@ -29,17 +31,27 @@ async function processPixels(pixels: Uint8ClampedArray, recipe: AdjustmentRecipe
   } finally { worker.terminate(); }
 }
 
-export async function renderSourceImage(url: string, crop: CropRect = fullCrop, maxEdge = 1600) {
+export async function renderSourceImage(url: string, crop: CropRect = fullCrop, maxEdge = 1600, composition: Composition = defaultComposition) {
   const image = await loadImage(url);
-  const source = cropSourceRect(image.naturalWidth, image.naturalHeight, crop);
+  const size = transformedSize(image.naturalWidth,image.naturalHeight,composition);
+  const source = cropSourceRect(size.width, size.height, crop);
   const { width, height } = calculateOutputSize(source.width, source.height, maxEdge);
   assertSafePixelCount(width, height);
   const canvas = document.createElement('canvas');
   canvas.width = width; canvas.height = height;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('浏览器无法创建图像画布');
-  context.drawImage(image, source.x, source.y, source.width, source.height, 0, 0, width, height);
-  return { canvas, sourceSize: { width: image.naturalWidth, height: image.naturalHeight } };
+  const scaleX=width/source.width,scaleY=height/source.height;
+  context.scale(scaleX,scaleY);
+  context.translate(-source.x,-source.y);
+  context.translate(size.width/2,size.height/2);
+  context.rotate(composition.straighten*Math.PI/180);
+  const zoom=straightenScale(size.width,size.height,composition.straighten);
+  context.scale(zoom*(composition.flipX?-1:1),zoom*(composition.flipY?-1:1));
+  context.rotate(composition.rotation*Math.PI/2);
+  context.drawImage(image,-image.naturalWidth/2,-image.naturalHeight/2);
+  context.resetTransform();
+  return { canvas, sourceSize: size, originalSize: {width:image.naturalWidth,height:image.naturalHeight} };
 }
 
 async function adjustCanvas(canvas: HTMLCanvasElement, recipe: AdjustmentRecipe) {
@@ -52,13 +64,14 @@ async function adjustCanvas(canvas: HTMLCanvasElement, recipe: AdjustmentRecipe)
   return canvas;
 }
 
-export async function renderAdjustedImage(url: string, recipe: AdjustmentRecipe, maxEdge = 1600, crop: CropRect = fullCrop) {
-  const { canvas } = await renderSourceImage(url, crop, maxEdge);
+export async function renderAdjustedImage(url: string, recipe: AdjustmentRecipe, maxEdge = 1600, crop: CropRect = fullCrop, composition: Composition = defaultComposition, filter?: FilterState | null) {
+  const { canvas } = await renderSourceImage(url, crop, maxEdge,composition);
+  if(filter) await adjustCanvas(canvas,{...filter.recipe,strength:filter.recipe.strength*filter.strength/100});
   return adjustCanvas(canvas, recipe);
 }
 
-export async function exportAdjustedImage(url: string, recipe: AdjustmentRecipe, options: { format: string; quality: number; maxEdge: number; name: string; crop?: CropRect }) {
-  const canvas = await renderAdjustedImage(url, recipe, options.maxEdge, options.crop);
+export async function exportAdjustedImage(url: string, recipe: AdjustmentRecipe, options: { format: string; quality: number; maxEdge: number; name: string; crop?: CropRect; composition?: Composition; filter?: FilterState | null }) {
+  const canvas = await renderAdjustedImage(url, recipe, options.maxEdge, options.crop,options.composition,options.filter);
   const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error('导出失败')), `image/${options.format}`, options.quality));
   const href = URL.createObjectURL(blob);
   const link = document.createElement('a'); link.href = href; link.download = `${options.name || 'lightune'}-光调.${options.format === 'jpeg' ? 'jpg' : options.format}`; link.click();
@@ -66,13 +79,13 @@ export async function exportAdjustedImage(url: string, recipe: AdjustmentRecipe,
   return { bytes: blob.size, width: canvas.width, height: canvas.height };
 }
 
-export async function createPresetThumbnail(url: string, recipe: AdjustmentRecipe, crop: CropRect = fullCrop) {
-  const canvas = await renderAdjustedImage(url, recipe, 240, crop);
+export async function createPresetThumbnail(url: string, recipe: AdjustmentRecipe, crop: CropRect = fullCrop, composition?: Composition, filter?: FilterState|null) {
+  const canvas = await renderAdjustedImage(url, recipe, 240, crop,composition,filter);
   return canvas.toDataURL('image/jpeg', 0.74);
 }
 
 export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCrop, cropEditing = false,
-  cropDraft = fullCrop, cropAspect, onCropDraftChange, onImageInfo }: Props) {
+  cropDraft = fullCrop, cropAspect, onCropDraftChange, onImageInfo,composition=defaultComposition,filter }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const originalCanvasRef = useRef<HTMLCanvasElement>(null);
   const activePointer = useRef<number | null>(null);
@@ -81,19 +94,30 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
   const [sourceSize, setSourceSize] = useState<{ width: number; height: number }>();
   const [error, setError] = useState('');
   const [holdingOriginal, setHoldingOriginal] = useState(false);
+  const [cropImage,setCropImage]=useState('');
+  const [view,setView]=useState({zoom:1,x:0,y:0});
+  const viewRef=useRef(view);
+  const pointers=useRef(new Map<number,{x:number;y:number}>());
+  const pinch=useRef<{distance:number;zoom:number;centerX:number;centerY:number;x:number;y:number}|null>(null);
+  const pan=useRef<{id:number;x:number;y:number;startX:number;startY:number}|null>(null);
+  const setViewing=(next:typeof view)=>{viewRef.current=next;setView(next);};
+  const resetView=()=>{pointers.current.clear();pinch.current=null;pan.current=null;activePointer.current=null;setViewing({zoom:1,x:0,y:0});};
+  useEffect(resetView,[imageUrl,cropEditing,composition.rotation]);
 
   useEffect(() => {
     let active = true;
     setBusy(true);
     const timer = window.setTimeout(async () => {
       try {
-        const { canvas: rendered, sourceSize: dimensions } = await renderSourceImage(imageUrl, crop, 1400);
+        const { canvas: rendered, sourceSize: dimensions, originalSize } = await renderSourceImage(imageUrl, cropEditing?fullCrop:crop, 1400,composition);
         if (!active || !canvasRef.current || !originalCanvasRef.current) return;
         setSourceSize(dimensions);
-        onImageInfo?.(dimensions);
+        onImageInfo?.(originalSize);
+        if(cropEditing) setCropImage(rendered.toDataURL('image/png'));
         const original = originalCanvasRef.current;
         original.width = rendered.width; original.height = rendered.height;
         original.getContext('2d')?.drawImage(rendered, 0, 0);
+        if(filter) await adjustCanvas(rendered,{...filter.recipe,strength:filter.recipe.strength*filter.strength/100});
         await adjustCanvas(rendered, recipe);
         if (!active || !canvasRef.current) return;
         const canvas = canvasRef.current;
@@ -104,7 +128,7 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
       finally { if (active) setBusy(false); }
     }, 90);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [imageUrl, recipe, crop, onImageInfo]);
+  }, [imageUrl, recipe, crop, onImageInfo,composition.rotation,composition.flipX,composition.flipY,composition.straighten,filter,cropEditing]);
 
   const setSplitFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
     if (cropEditing) return;
@@ -113,21 +137,37 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
   };
 
   return <section className="stage" aria-label="照片编辑画布">
-    <div className="canvas-shell" title={cropEditing ? '拖动裁剪框调整范围' : '点击或拖动以调整前后对比位置'}
+    <div className="canvas-shell" style={{'--view-transform':cropEditing?'none':`translate(${view.x}px,${view.y}px) scale(${view.zoom})`} as React.CSSProperties} onDoubleClick={()=>{if(!cropEditing)resetView();}} title={cropEditing ? '拖动裁剪框调整范围' : view.zoom>1?'拖动查看，双击适应画布':'点击或拖动以调整前后对比位置'}
       onPointerDown={(event) => {
         if (cropEditing || !event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        pointers.current.set(event.pointerId,{x:event.clientX,y:event.clientY});
+        if(viewRef.current.zoom>1){pan.current={id:event.pointerId,x:event.clientX,y:event.clientY,startX:viewRef.current.x,startY:viewRef.current.y};event.currentTarget.setPointerCapture(event.pointerId);return;}
         activePointer.current = event.pointerId;
         event.currentTarget.setPointerCapture(event.pointerId);
         setSplitFromPointer(event);
       }}
-      onPointerMove={(event) => { if (activePointer.current === event.pointerId) setSplitFromPointer(event); }}
+      onPointerDownCapture={event=>{
+        if(cropEditing||event.pointerType!=='touch')return;
+        pointers.current.set(event.pointerId,{x:event.clientX,y:event.clientY});
+        if(pointers.current.size===2){const [a,b]=[...pointers.current.values()];pinch.current={distance:Math.hypot(a.x-b.x,a.y-b.y),zoom:viewRef.current.zoom,centerX:(a.x+b.x)/2,centerY:(a.y+b.y)/2,x:viewRef.current.x,y:viewRef.current.y};activePointer.current=null;pan.current=null;event.currentTarget.setPointerCapture(event.pointerId);}
+      }}
+      onPointerMove={(event) => {
+        if(cropEditing)return;
+        if(pointers.current.has(event.pointerId))pointers.current.set(event.pointerId,{x:event.clientX,y:event.clientY});
+        if(pinch.current&&pointers.current.size>=2){const [a,b]=[...pointers.current.values()],start=pinch.current;const zoom=Math.max(1,Math.min(4,start.zoom*Math.hypot(a.x-b.x,a.y-b.y)/Math.max(1,start.distance)));setViewing({zoom,x:zoom===1?0:start.x+(a.x+b.x)/2-start.centerX,y:zoom===1?0:start.y+(a.y+b.y)/2-start.centerY});return;}
+        if(pan.current?.id===event.pointerId){setViewing({...viewRef.current,x:pan.current.startX+event.clientX-pan.current.x,y:pan.current.startY+event.clientY-pan.current.y});return;}
+        if(activePointer.current===event.pointerId&&!pinch.current)setSplitFromPointer(event);
+      }}
       onPointerUp={(event) => {
+        pointers.current.delete(event.pointerId);pan.current=null;
+        if(pinch.current){if(!pointers.current.size)pinch.current=null;return;}
         if (activePointer.current !== event.pointerId) return;
         setSplitFromPointer(event);
         activePointer.current = null;
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       }}
       onPointerCancel={(event) => {
+        pointers.current.delete(event.pointerId);pan.current=null;pinch.current=null;
         if (activePointer.current !== event.pointerId) return;
         activePointer.current = null;
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
@@ -140,10 +180,11 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
       <span className="image-label original-label">原图</span><span className="image-label effect-label">效果图</span>
       {busy ? <div className="processing">正在渲染预览…</div> : null}
       {error ? <div className="processing error">{error}</div> : null}
-      {cropEditing && onCropDraftChange ? <CropOverlay imageUrl={imageUrl} sourceSize={sourceSize} crop={cropDraft} aspect={cropAspect} onChange={onCropDraftChange} /> : null}
+      {cropEditing && cropImage && onCropDraftChange ? <CropOverlay imageUrl={cropImage} sourceSize={sourceSize} crop={cropDraft} aspect={cropAspect} onChange={onCropDraftChange} /> : null}
     </div>
     <div className="stage-footer">
       <div className="file-chip"><ImageUp size={14} /><span>{fileName}</span></div>
+      <div className="view-controls"><button aria-label="缩小查看" disabled={cropEditing||view.zoom<=1} onClick={()=>{const zoom=Math.max(1,view.zoom-0.5);setViewing({zoom,x:zoom===1?0:view.x,y:zoom===1?0:view.y});}}>−</button><button aria-label="适应画布" disabled={cropEditing} onClick={resetView}>{Math.round(view.zoom*100)}%</button><button aria-label="放大查看" disabled={cropEditing||view.zoom>=4} onClick={()=>setViewing({...view,zoom:Math.min(4,view.zoom+0.5)})}>＋</button></div>
       <button
         className="hold-original"
         aria-label="按住查看原图"

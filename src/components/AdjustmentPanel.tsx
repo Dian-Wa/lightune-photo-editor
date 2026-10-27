@@ -27,12 +27,15 @@ const adjustmentNavigation = [
 ];
 
 export default function AdjustmentPanel({ recipe, dirty, onFieldChange, onRecipeChange }: Props) {
+  const [navigationMode,setNavigationMode]=useState<'common'|'all'>('common');
+  const commonCategories=['brightness','exposure','contrast','highlights','shadows','temperature','saturation','clarity'];
   const [color, setColor] = useState<ColorBand>('Red');
   const [activeCategory, setActiveCategory] = useState('brightness');
   const activeEntry = adjustmentNavigation.find((entry) => entry.id === activeCategory)!;
   return <section className="adjustments" aria-label="调整参数面板">
     <div className="adjustment-content">
     <div className="section-heading"><Settings2 size={17} /><h2>手动调整</h2><span className={dirty ? 'unsaved' : ''}>{dirty ? '有未保存的调整' : '已保存'}</span></div>
+    <div className="adjustment-modes"><button aria-pressed={navigationMode==='common'} onClick={()=>{setNavigationMode('common');if(!commonCategories.includes(activeCategory))setActiveCategory('brightness');}}>常用</button><button aria-pressed={navigationMode==='all'} onClick={()=>setNavigationMode('all')}>全部</button></div>
     <p className="adjustment-guide">{adjustmentNavigation.length} 个类别 · {adjustmentCount} 项调整 · 当前：{activeEntry.label}</p>
     <div className="strength" id="adjustment-category-strength" hidden={activeCategory !== 'strength'}><AdjustmentSlider field="strength" value={recipe.strength} onChange={onFieldChange} /></div>
     {recipeModules.map((module) => {
@@ -69,9 +72,9 @@ export default function AdjustmentPanel({ recipe, dirty, onFieldChange, onRecipe
     })}
     </div>
     <nav className="adjustment-navigation" aria-label="调色类别">
-      {adjustmentNavigation.map((entry) => <button key={entry.id} type="button"
+      {adjustmentNavigation.filter(entry=>navigationMode==='all'||commonCategories.includes(entry.id)).map((entry) => <button key={entry.id} type="button"
         aria-pressed={activeCategory === entry.id} aria-controls={`adjustment-category-${entry.id}`}
-        onClick={() => setActiveCategory(entry.id)}>{entry.label}</button>)}
+        onClick={() => setActiveCategory(entry.id)}>{entry.label}{(entry.moduleId?recipeModules.find(module=>module.id===entry.id)?.keys.some(key=>recipe[key]!==controlDefinitions[key].defaultValue):false)||recipe[entry.id as RecipeKey]!==undefined&&recipe[entry.id as RecipeKey]!==controlDefinitions[entry.id as RecipeKey]?.defaultValue?<i className="category-dot"/>:null}</button>)}
     </nav>
   </section>;
 }

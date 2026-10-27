@@ -1,21 +1,23 @@
 import { openDB } from 'idb';
 import { normalizeRecipe, presetSchema, type Preset } from '../domain/recipe';
+import type { EditorDocument } from '../domain/editorDocument';
 
 const dbName = 'lightune-local';
 const storeName = 'presets';
 
 async function database() {
   if (typeof indexedDB === 'undefined') return null;
-  return openDB(dbName, 2, { upgrade(db) {
+  return openDB(dbName, 3, { upgrade(db) {
     if (!db.objectStoreNames.contains(storeName)) db.createObjectStore(storeName, { keyPath: 'id' });
     if (!db.objectStoreNames.contains('session')) db.createObjectStore('session');
+    if (!db.objectStoreNames.contains('drafts')) db.createObjectStore('drafts',{keyPath:'id'});
   } });
 }
 
 export async function loadUserPresets(): Promise<Preset[]> {
   const db = await database();
   const presets = db ? (await db.getAll(storeName)) as Preset[] : [];
-  return presets.map((preset) => ({ ...preset, recipe: normalizeRecipe(preset.recipe) }));
+  return presets.map((preset) => ({ ...preset, recipe: normalizeRecipe(preset.recipe),filter:preset.filter?{...preset.filter,recipe:normalizeRecipe(preset.filter.recipe)}:undefined }));
 }
 
 export async function savePreset(preset: Preset) {
@@ -60,6 +62,17 @@ export function parsePresetBackup(raw: string): Preset[] {
   return input.map((item) => {
     const parsed = presetSchema.safeParse(item);
     if (!parsed.success || parsed.data.source === 'builtin') throw new Error('备份中包含无效模板');
-    return { ...parsed.data, recipe: normalizeRecipe(parsed.data.recipe) } as Preset;
+    return { ...parsed.data, recipe: normalizeRecipe(parsed.data.recipe),filter:parsed.data.filter?{...parsed.data.filter,recipe:normalizeRecipe(parsed.data.filter.recipe)}:undefined } as Preset;
   });
+}
+
+export type EditorDraft = { id:string; version:1; name:string; source:Blob; document:EditorDocument; updatedAt:string; thumbnail?:string };
+export async function loadDrafts(): Promise<EditorDraft[]> {
+  const db=await database();
+  return db ? ((await db.getAll('drafts')) as EditorDraft[]).filter(draft=>draft.version===1).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)) : [];
+}
+export async function saveDraft(draft:EditorDraft) {
+  const db=await database();
+  if(!db) throw new Error('浏览器不支持本地草稿');
+  await db.put('drafts',draft);
 }
