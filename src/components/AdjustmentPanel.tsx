@@ -31,12 +31,8 @@ export default function AdjustmentPanel({ recipe, dirty, onFieldChange, onRecipe
   const [activeCategory, setActiveCategory] = useState('brightness');
   const activeEntry = adjustmentNavigation.find((entry) => entry.id === activeCategory)!;
   return <section className="adjustments" aria-label="调整参数面板">
+    <div className="adjustment-content">
     <div className="section-heading"><Settings2 size={17} /><h2>手动调整</h2><span className={dirty ? 'unsaved' : ''}>{dirty ? '有未保存的调整' : '已保存'}</span></div>
-    <nav className="adjustment-navigation" aria-label="调色类别">
-      {adjustmentNavigation.map((entry) => <button key={entry.id} type="button"
-        aria-pressed={activeCategory === entry.id} aria-controls={`adjustment-category-${entry.id}`}
-        onClick={() => setActiveCategory(entry.id)}>{entry.label}</button>)}
-    </nav>
     <p className="adjustment-guide">{adjustmentNavigation.length} 个类别 · {adjustmentCount} 项调整 · 当前：{activeEntry.label}</p>
     <div className="strength" id="adjustment-category-strength" hidden={activeCategory !== 'strength'}><AdjustmentSlider field="strength" value={recipe.strength} onChange={onFieldChange} /></div>
     {recipeModules.map((module) => {
@@ -71,5 +67,11 @@ export default function AdjustmentPanel({ recipe, dirty, onFieldChange, onRecipe
         </fieldset>
       </div>;
     })}
+    </div>
+    <nav className="adjustment-navigation" aria-label="调色类别">
+      {adjustmentNavigation.map((entry) => <button key={entry.id} type="button"
+        aria-pressed={activeCategory === entry.id} aria-controls={`adjustment-category-${entry.id}`}
+        onClick={() => setActiveCategory(entry.id)}>{entry.label}</button>)}
+    </nav>
   </section>;
 }

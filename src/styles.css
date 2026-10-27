@@ -118,6 +118,10 @@ button:focus-visible,input[type="range"]:focus-visible{outline:2px solid var(--a
   .inspector section{padding:12px 14px}.inspector .ai-panel,.inspector .adjustments,.inspector .crop-tools,.inspector .export-settings{display:none}
   .app-shell[data-mobile-tool="ai"] .inspector .ai-panel,.app-shell[data-mobile-tool="adjust"] .inspector .adjustments,.app-shell[data-mobile-tool="crop"] .inspector .crop-tools,.app-shell[data-mobile-tool="export"] .inspector .export-settings{display:block}
   .app-shell[data-mobile-tool="crop"] .inspector{overflow:hidden}
+  .app-shell[data-mobile-tool="adjust"] .inspector{overflow:hidden}
+  .app-shell[data-mobile-tool="adjust"] .inspector .adjustments{display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden;padding-bottom:0!important}
+  .adjustment-content{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+  .adjustments .adjustment-navigation{flex:none;margin:0 -14px;padding:9px 14px 10px;border-top:1px solid var(--line);background:#1c2226;box-shadow:0 -5px 12px #10161950;z-index:1}
   .app-shell[data-mobile-tool="crop"] .inspector .crop-tools{display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden}
   .crop-fields{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
   .crop-actions{flex:none;margin:0 -14px -12px;padding:8px 14px 12px;background:#1c2226;z-index:2;box-shadow:0 -8px 14px #10161970}
