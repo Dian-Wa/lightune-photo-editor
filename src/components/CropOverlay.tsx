@@ -40,7 +40,11 @@ export default function CropOverlay({ imageUrl, sourceSize, crop, aspect, onChan
     return { x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height };
   };
 
-  return <div className="crop-overlay" ref={shellRef}>
+  return <div className="crop-overlay" ref={shellRef}
+    onPointerDown={(event) => event.stopPropagation()}
+    onPointerMove={(event) => event.stopPropagation()}
+    onPointerUp={(event) => event.stopPropagation()}
+    onPointerCancel={(event) => event.stopPropagation()}>
     {displayedWidth > 0 && displayedHeight > 0 ? <div className="crop-image" style={{
       width: displayedWidth, height: displayedHeight,
       left: (shellSize.width - displayedWidth) / 2,

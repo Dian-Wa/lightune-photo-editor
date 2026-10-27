@@ -107,14 +107,15 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
   }, [imageUrl, recipe, crop, onImageInfo]);
 
   const setSplitFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (cropEditing) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     if (bounds.width > 0) setSplit(Math.round(Math.max(0, Math.min(100, (event.clientX - bounds.left) / bounds.width * 100))));
   };
 
   return <section className="stage" aria-label="照片编辑画布">
-    <div className="canvas-shell" title="点击或拖动以调整前后对比位置"
+    <div className="canvas-shell" title={cropEditing ? '拖动裁剪框调整范围' : '点击或拖动以调整前后对比位置'}
       onPointerDown={(event) => {
-        if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        if (cropEditing || !event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
         activePointer.current = event.pointerId;
         event.currentTarget.setPointerCapture(event.pointerId);
         setSplitFromPointer(event);
@@ -135,7 +136,7 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
       <div className="original-layer" style={{ clipPath: `inset(0 ${holdingOriginal ? 0 : 100 - split}% 0 0)` }}>
         <canvas ref={originalCanvasRef} aria-label={`${fileName} 原图`} />
       </div>
-      {!holdingOriginal ? <div className="split-line" style={{ left: `${split}%` }}><Columns2 size={15} /></div> : null}
+      {!holdingOriginal && !cropEditing ? <div className="split-line" style={{ left: `${split}%` }}><Columns2 size={15} /></div> : null}
       <span className="image-label original-label">原图</span><span className="image-label effect-label">效果图</span>
       {busy ? <div className="processing">正在渲染预览…</div> : null}
       {error ? <div className="processing error">{error}</div> : null}
@@ -147,6 +148,7 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
         className="hold-original"
         aria-label="按住查看原图"
         aria-pressed={holdingOriginal}
+        disabled={cropEditing}
         onPointerDown={() => setHoldingOriginal(true)}
         onPointerUp={() => setHoldingOriginal(false)}
         onPointerCancel={() => setHoldingOriginal(false)}
@@ -154,7 +156,7 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
         onKeyDown={(event) => { if (event.key === ' ' || event.key === 'Enter') setHoldingOriginal(true); }}
         onKeyUp={() => setHoldingOriginal(false)}
       >{holdingOriginal ? '松开返回效果' : '按住看原图'}</button>
-      <label className="compare-range">前后对比 <input aria-label="前后对比位置" type="range" min="0" max="100" value={split} onChange={(e) => setSplit(Number(e.target.value))} /></label>
+      <label className="compare-range">前后对比 <input aria-label="前后对比位置" disabled={cropEditing} type="range" min="0" max="100" value={split} onChange={(e) => { if (!cropEditing) setSplit(Number(e.target.value)); }} /></label>
     </div>
   </section>;
 }
