@@ -6,7 +6,7 @@ import { cropSourceRect, fullCrop, type CropRect } from '../lib/crop';
 import CropOverlay from './CropOverlay';
 
 type Props = { imageUrl: string; recipe: AdjustmentRecipe; fileName: string; crop?: CropRect;
-  cropEditing?: boolean; cropDraft?: CropRect; onCropDraftChange?: (crop: CropRect) => void;
+  cropEditing?: boolean; cropDraft?: CropRect; cropAspect?: number | null; onCropDraftChange?: (crop: CropRect) => void;
   onImageInfo?: (size: { width: number; height: number }) => void };
 
 async function loadImage(url: string) {
@@ -72,7 +72,7 @@ export async function createPresetThumbnail(url: string, recipe: AdjustmentRecip
 }
 
 export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCrop, cropEditing = false,
-  cropDraft = fullCrop, onCropDraftChange, onImageInfo }: Props) {
+  cropDraft = fullCrop, cropAspect, onCropDraftChange, onImageInfo }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const originalCanvasRef = useRef<HTMLCanvasElement>(null);
   const activePointer = useRef<number | null>(null);
@@ -139,7 +139,7 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
       <span className="image-label original-label">原图</span><span className="image-label effect-label">效果图</span>
       {busy ? <div className="processing">正在渲染预览…</div> : null}
       {error ? <div className="processing error">{error}</div> : null}
-      {cropEditing && onCropDraftChange ? <CropOverlay imageUrl={imageUrl} sourceSize={sourceSize} crop={cropDraft} onChange={onCropDraftChange} /> : null}
+      {cropEditing && onCropDraftChange ? <CropOverlay imageUrl={imageUrl} sourceSize={sourceSize} crop={cropDraft} aspect={cropAspect} onChange={onCropDraftChange} /> : null}
     </div>
     <div className="stage-footer">
       <div className="file-chip"><ImageUp size={14} /><span>{fileName}</span></div>

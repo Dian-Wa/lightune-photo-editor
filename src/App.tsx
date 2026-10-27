@@ -302,7 +302,7 @@ export default function App() {
         </div>
       </aside>
       <PhotoCanvas imageUrl={imageUrl} recipe={recipe} fileName={fileName} crop={crop}
-        cropEditing={isMobile && mobileTool === 'crop' && cropEditing} cropDraft={cropDraft}
+        cropEditing={isMobile && mobileTool === 'crop' && cropEditing} cropDraft={cropDraft} cropAspect={cropAspect}
         onCropDraftChange={setCropDraft} onImageInfo={setImageSize} />
       <aside className="inspector">
         <section className="ai-panel">

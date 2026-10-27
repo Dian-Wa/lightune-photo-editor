@@ -1,4 +1,27 @@
 export type CropRect = { x: number; y: number; width: number; height: number };
+export type CropHandle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+
+export function resizeCrop(crop: CropRect, handle: CropHandle, dx: number, dy: number, ratio?: number): CropRect {
+  const horizontal = handle.includes('e') || handle.includes('w');
+  const vertical = handle.includes('n') || handle.includes('s');
+  const anchorX = handle.includes('w') ? crop.x + crop.width : handle.includes('e') ? crop.x : crop.x + crop.width / 2;
+  const anchorY = handle.includes('n') ? crop.y + crop.height : handle.includes('s') ? crop.y : crop.y + crop.height / 2;
+  const maxWidth = horizontal ? (handle.includes('w') ? anchorX : 1 - anchorX) : 2 * Math.min(anchorX, 1 - anchorX);
+  const maxHeight = vertical ? (handle.includes('n') ? anchorY : 1 - anchorY) : 2 * Math.min(anchorY, 1 - anchorY);
+  let width = horizontal ? clamp(crop.width + (handle.includes('w') ? -dx : dx), 0.05, maxWidth) : crop.width;
+  let height = vertical ? clamp(crop.height + (handle.includes('n') ? -dy : dy), 0.05, maxHeight) : crop.height;
+  if (ratio && ratio > 0) {
+    const useWidth = horizontal && (!vertical || Math.abs(dx) >= Math.abs(dy * ratio));
+    width = useWidth ? width : height * ratio;
+    width = clamp(width, Math.min(Math.max(0.05, 0.05 * ratio), maxWidth, maxHeight * ratio), Math.min(maxWidth, maxHeight * ratio));
+    height = width / ratio;
+  }
+  return normalizeCrop({
+    x: handle.includes('w') ? anchorX - width : horizontal ? anchorX : anchorX - width / 2,
+    y: handle.includes('n') ? anchorY - height : vertical ? anchorY : anchorY - height / 2,
+    width, height,
+  });
+}
 
 export const fullCrop: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 
