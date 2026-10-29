@@ -4,7 +4,10 @@ import {
   LayoutTemplate, Pencil, Plus, RotateCcw, RotateCw, Save, Search, Settings2, SlidersHorizontal, Sparkles, WandSparkles,
   Trash2, Undo2, Upload, X, ArrowLeft, MoreHorizontal, History, FolderOpen, Check,
 } from 'lucide-react';
-import PhotoCanvas, { createPresetThumbnail, exportAdjustedImage } from './components/PhotoCanvas';
+import PhotoCanvas, { createPresetThumbnail, exportAdjustedImage,renderSourceImage } from './components/PhotoCanvas';
+import PortraitPanel from './components/PortraitPanel';
+import {createPortraitRegion,type PortraitRegion,type PortraitMask} from './domain/portrait';
+import {detectPortraits} from './lib/portraitDetector';
 import AdjustmentPanel from './components/AdjustmentPanel';
 import CropTools from './components/CropTools';
 import PresetThumbnail from './components/PresetThumbnail';
@@ -25,7 +28,7 @@ import { createDocument, initialHistory, commitDocument, moveHistory, defaultCom
 
 const sampleNames: Record<Preset['previewType'], string> = { portrait: '内置旅行人像样片', landscape: '内置风景样片', food: '内置美食样片', indoor: '内置室内样片' };
 type Tab = 'builtin' | 'mine' | 'favorite';
-type MobileTool = 'none' | 'filter' | 'template' | 'adjust' | 'crop' | 'ai' | 'export' | 'more' | 'creative' | 'local';
+type MobileTool = 'none' | 'filter' | 'template' | 'adjust' | 'crop' | 'ai' | 'export' | 'more' | 'creative' | 'local' | 'portrait';
 type ExportFormat = 'jpeg' | 'png' | 'webp';
 
 const downloadJson = (value: unknown, name: string) => {
@@ -77,6 +80,9 @@ export default function App() {
   const [selectedLocalId,setSelectedLocalId]=useState<string|null>(null);
   const [brushSize,setBrushSize]=useState(.06),[maskFeather,setMaskFeather]=useState(.5),[eraseMask,setEraseMask]=useState(false),[showMask,setShowMask]=useState(true);
   const stickerEpoch=useRef(0);
+  const [selectedPortraitId,setSelectedPortraitId]=useState<string|null>(null);
+  const [portraitBusy,setPortraitBusy]=useState(false),[portraitStatus,setPortraitStatus]=useState('识别和修图都在当前设备完成');
+  const portraitJob=useRef<AbortController|null>(null);
   const sessionMayRestore=useRef(true);
   const [draftBusy,setDraftBusy]=useState(false);
   const draftThumbnails=useRef(new Map<string,string>());
@@ -98,6 +104,7 @@ export default function App() {
   const recipe=document.recipe;
   const layers=document.layers||[],locals=document.locals||[];
   const selectedLocal=locals.find(local=>local.id===selectedLocalId)||null;
+  const portraits=document.portraits||[],selectedPortrait=portraits.find(region=>region.id===selectedPortraitId)||null;
   const crop=document.composition.crop;
   const selectedId=document.selectedId;
   const [geometryDraft,setGeometryDraft]=useState<Composition>(defaultComposition);
@@ -202,7 +209,7 @@ export default function App() {
     if (file.size > 20 * 1024 * 1024) return setNotice('图片不能超过 20MB');
     if (dirty && !window.confirm('导入新照片会保留当前参数，是否继续？')) return;
     flushCurrentDraft();invalidateAi();
-    const next = URL.createObjectURL(file); sourceBlob.current=file;resetCreativeSource();setDraftId(null);setPage('editor');setImageUrl(next); setIsSample(false); setFileName(file.name.replace(/\.[^.]+$/, ''));const nextHistory=initialHistory({...currentDocument(),composition:defaultComposition,layers:[],locals:[],border:defaultBorder});setHistory(nextHistory);toolBaseline.current=nextHistory;setPreviewDocument(null);previewRef.current=null; setGeometryDraft(defaultComposition); setCropAspect(null); setCropEditing(false); setNotice('照片已载入，原图不会上传');
+    const next = URL.createObjectURL(file); sourceBlob.current=file;resetCreativeSource();setDraftId(null);setPage('editor');setImageUrl(next); setIsSample(false); setFileName(file.name.replace(/\.[^.]+$/, ''));const nextHistory=initialHistory({...currentDocument(),composition:defaultComposition,layers:[],locals:[],portraits:[],border:defaultBorder});setHistory(nextHistory);toolBaseline.current=nextHistory;setPreviewDocument(null);previewRef.current=null; setGeometryDraft(defaultComposition); setCropAspect(null); setCropEditing(false); setNotice('照片已载入，原图不会上传');
   };
   const selectedUserPreset = userPresets.find((preset) => preset.id === selectedId && !preset.deletedAt);
   const selectedBuiltinPreset = builtinPresets.find((preset) => preset.id === selectedId);
@@ -328,7 +335,24 @@ export default function App() {
   const updateCreative=(patch:Partial<EditorDocument>,label='创作调整')=>{const next={...currentDocument(),...patch};if(gestureActive.current){previewRef.current=next;setPreviewDocument(next);}else commit(next,label);};
   const updateLayer=(layer:CreativeLayer,label='修改图层')=>updateCreative({layers:(currentDocument().layers||[]).map(item=>item.id===layer.id?layer:item)},label);
   const updateLocal=(local:LocalAdjustment)=>updateCreative({locals:(currentDocument().locals||[]).map(item=>item.id===local.id?local:item)},'局部调整');
-  const resetCreativeSource=()=>{stickerEpoch.current++;setAssetBlobs({});setSelectedLayerId(null);setSelectedLocalId(null);};
+  const invalidatePortrait=()=>{portraitJob.current?.abort();portraitJob.current=null;setPortraitBusy(false);};
+  useEffect(()=>()=>{portraitJob.current?.abort();},[]);
+  const startPortraitGesture=()=>{invalidatePortrait();startCreativeGesture();};
+  const updatePortrait=(region:PortraitRegion)=>{invalidatePortrait();updateCreative({portraits:(currentDocument().portraits||[]).map(r=>r.id===region.id?region:r)},'人像调整');};
+  const identifyPortraits=async()=>{
+    invalidatePortrait();finishGesture();const controller=new AbortController();portraitJob.current=controller;setPortraitBusy(true);setPortraitStatus('正在本地加载模型并识别人脸，请稍候…');
+    try{
+      const {canvas}=await renderSourceImage(imageUrl,fullCrop,1280,defaultComposition);
+      if(controller.signal.aborted)return;
+      const faces=await detectPortraits(await createImageBitmap(canvas),controller.signal);
+      if(portraitJob.current!==controller||controller.signal.aborted)return;
+      const regions=faces.map((face,index)=>({...createPortraitRegion({...face,id:crypto.randomUUID()}),name:`人脸 ${index+1}`}));
+      if(regions.length){updateCreative({portraits:[...(currentDocument().portraits||[]),...regions]},'识别人脸区域');setSelectedPortraitId(regions[0].id);setMaskFeather(regions[0].mask.feather);setShowMask(true);setEraseMask(false);}
+      setPortraitStatus(regions.length?`已新增 ${regions.length} 个人脸区域，请检查蒙版后调整；默认效果为零`:'未识别到清晰人脸，可添加手动皮肤区域');
+    }catch(error){if(portraitJob.current===controller&&!controller.signal.aborted)setPortraitStatus(error instanceof Error?error.message:'识别失败，可手动涂抹');}
+    finally{if(portraitJob.current===controller){portraitJob.current=null;setPortraitBusy(false);}}
+  };
+  const resetCreativeSource=()=>{invalidatePortrait();stickerEpoch.current++;setAssetBlobs({});setSelectedLayerId(null);setSelectedLocalId(null);setSelectedPortraitId(null);setPortraitStatus('识别和修图都在当前设备完成');};
   const importSticker=async(file:File)=>{
     const epoch=stickerEpoch.current;
     if(!['image/png','image/webp','image/jpeg'].includes(file.type))return setNotice('贴纸支持 PNG、WebP 或 JPG 图片');
@@ -340,6 +364,7 @@ export default function App() {
   };
   const commitComposition=()=>{if(cropEditing){commit({...currentDocument(),composition:{...geometryDraft,crop:normalizeCrop(cropDraft)}},'构图');setCropEditing(false);}};
   const changeTool=(tool:MobileTool)=>{
+    invalidatePortrait();
     if(tool!=='creative')stickerEpoch.current++;
     finishGesture();commitComposition();toolBaseline.current=historyRef.current;toolDirtyBaseline.current=dirty;toolMetadata.current={recipeSource,aiDraft};
     if(tool!=='ai'&&aiBusy)invalidateAi();
@@ -348,9 +373,9 @@ export default function App() {
     if(tool==='template')setTab('mine');
     if(tool==='crop'){setGeometryDraft(currentDocument().composition);setCropEditing(true);}
   };
-  const cancelTool=()=>{stickerEpoch.current++;invalidateAi();gestureActive.current=false;previewRef.current=null;setPreviewDocument(null);const retained=new Set(toolBaseline.current.entries.flatMap(entry=>(entry.document.layers||[]).flatMap(layer=>layer.type==='sticker'?[layer.assetId]:[])));setAssetBlobs(Object.fromEntries(Object.entries(assetBlobsRef.current).filter(([id])=>retained.has(id))));setHistory(toolBaseline.current);setDirty(toolDirtyBaseline.current);setRecipeSource(toolMetadata.current.recipeSource);setAiDraft(toolMetadata.current.aiDraft);setCropEditing(false);setMobileTool('none');setNotice('已取消本工具调整');};
-  const applyTool=()=>{finishGesture();commitComposition();toolBaseline.current=historyRef.current;setMobileTool('none');setNotice('调整已应用');};
-  const goHome=()=>{finishGesture();commitComposition();flushCurrentDraft();invalidateAi();setPage('home');};
+  const cancelTool=()=>{invalidatePortrait();stickerEpoch.current++;invalidateAi();gestureActive.current=false;previewRef.current=null;setPreviewDocument(null);const retained=new Set(toolBaseline.current.entries.flatMap(entry=>(entry.document.layers||[]).flatMap(layer=>layer.type==='sticker'?[layer.assetId]:[])));setAssetBlobs(Object.fromEntries(Object.entries(assetBlobsRef.current).filter(([id])=>retained.has(id))));setHistory(toolBaseline.current);setDirty(toolDirtyBaseline.current);setRecipeSource(toolMetadata.current.recipeSource);setAiDraft(toolMetadata.current.aiDraft);setCropEditing(false);setMobileTool('none');setNotice('已取消本工具调整');};
+  const applyTool=()=>{invalidatePortrait();finishGesture();commitComposition();toolBaseline.current=historyRef.current;setMobileTool('none');setNotice('调整已应用');};
+  const goHome=()=>{invalidatePortrait();finishGesture();commitComposition();flushCurrentDraft();invalidateAi();setPage('home');};
   const startSample=()=>{
     if(draftBusy||exporting)return;
     setCropAspect(null);
@@ -372,7 +397,7 @@ export default function App() {
   const changePreviewType=(type:Preset['previewType'])=>{
     if(draftBusy||exporting)return;
     if(isSample)setCropAspect(null);
-    if(isSample){finishGesture();commitComposition();flushCurrentDraft();invalidateAi();resetCreativeSource();sourceBlob.current=null;setDraftId(null);setImageUrl(sampleImageUrl(type));setFileName(sampleNames[type]);setHistory(initialHistory({...currentDocument(),composition:defaultComposition,layers:[],locals:[],border:defaultBorder}));setCropEditing(false);setGeometryDraft(defaultComposition);}
+    if(isSample){finishGesture();commitComposition();flushCurrentDraft();invalidateAi();resetCreativeSource();sourceBlob.current=null;setDraftId(null);setImageUrl(sampleImageUrl(type));setFileName(sampleNames[type]);setHistory(initialHistory({...currentDocument(),composition:defaultComposition,layers:[],locals:[],portraits:[],border:defaultBorder}));setCropEditing(false);setGeometryDraft(defaultComposition);}
     setPreviewType(type);
   };
   const saveCurrentDraft=async()=>{
@@ -464,12 +489,12 @@ export default function App() {
       </aside>
       <PhotoCanvas imageUrl={imageUrl} recipe={recipe} fileName={fileName} crop={crop}
         composition={cropEditing?geometryDraft:document.composition} filter={document.filter} creative={document} assets={assetUrls}
-        interactionActive={mobileTool==='creative'||mobileTool==='local'}
-        editorOverlay={mobileTool==='creative'?<CreativeOverlay layers={layers} selectedId={selectedLayerId} onSelect={setSelectedLayerId} onChange={layer=>updateLayer(layer)} onStart={startCreativeGesture} onEnd={finishGesture} onCancel={cancelCreativeGesture}/>:mobileTool==='local'&&imageSize?<MaskOverlay local={selectedLocal} geometry={{sourceWidth:imageSize.width,sourceHeight:imageSize.height,composition:document.composition}} brushSize={brushSize} feather={maskFeather} erase={eraseMask} showMask={showMask} onChange={mask=>{const current=(currentDocument().locals||[]).find(local=>local.id===selectedLocalId);if(current)updateLocal({...current,mask});}} onStart={startCreativeGesture} onEnd={finishGesture} onCancel={cancelCreativeGesture}/>:null}
+        interactionActive={mobileTool==='creative'||mobileTool==='local'||mobileTool==='portrait'}
+        editorOverlay={mobileTool==='creative'?<CreativeOverlay layers={layers} selectedId={selectedLayerId} onSelect={setSelectedLayerId} onChange={layer=>updateLayer(layer)} onStart={startCreativeGesture} onEnd={finishGesture} onCancel={cancelCreativeGesture}/>:mobileTool==='local'&&imageSize?<MaskOverlay local={selectedLocal} geometry={{sourceWidth:imageSize.width,sourceHeight:imageSize.height,composition:document.composition}} brushSize={brushSize} feather={maskFeather} erase={eraseMask} showMask={showMask} onChange={mask=>{const current=(currentDocument().locals||[]).find(local=>local.id===selectedLocalId);if(current)updateLocal({...current,mask});}} onStart={startCreativeGesture} onEnd={finishGesture} onCancel={cancelCreativeGesture}/>:mobileTool==='portrait'&&imageSize?<MaskOverlay local={selectedPortrait?{...selectedPortrait,amount:100,recipe:{exposure:0,contrast:0,saturation:0,temperature:0,clarity:0,softness:0}}:null} geometry={{sourceWidth:imageSize.width,sourceHeight:imageSize.height,composition:document.composition}} brushSize={brushSize} feather={maskFeather} erase={eraseMask} showMask={showMask} onChange={mask=>{const current=(currentDocument().portraits||[]).find(region=>region.id===selectedPortraitId);if(current)updatePortrait({...current,mask:mask as PortraitMask});}} onStart={startPortraitGesture} onEnd={finishGesture} onCancel={cancelCreativeGesture}/>:null}
         cropEditing={mobileTool === 'crop' && cropEditing} cropDraft={cropDraft} cropAspect={cropAspect}
         onCropDraftChange={setCropDraft} onImageInfo={setImageSize} />
       <aside className="inspector" onPointerDownCapture={event=>{if((event.target as HTMLElement).matches('.adjustments input[type="range"]'))gestureActive.current=true;}} onPointerUpCapture={finishGesture} onPointerCancelCapture={finishGesture}>
-        <nav className="desktop-tool-nav" aria-label="桌面工具"><button onClick={()=>changeTool('adjust')}>调节</button><button onClick={()=>changeTool('crop')}>构图</button><button onClick={()=>changeTool('creative')}>创作</button><button onClick={()=>changeTool('local')}>局部</button><button onClick={()=>changeTool('ai')}>AI</button><button onClick={()=>changeTool('more')}>更多</button></nav>
+        <nav className="desktop-tool-nav" aria-label="桌面工具"><button onClick={()=>changeTool('adjust')}>调节</button><button onClick={()=>changeTool('crop')}>构图</button><button onClick={()=>changeTool('creative')}>创作</button><button onClick={()=>changeTool('local')}>局部</button><button onClick={()=>changeTool('portrait')}>人像</button><button onClick={()=>changeTool('ai')}>AI</button><button onClick={()=>changeTool('more')}>更多</button></nav>
         <section className="ai-panel">
           <div className="section-title"><Sparkles size={18} /><h2>AI 调色灵感</h2></div>
           <details className="ai-connection" ref={aiDetails}>
@@ -505,7 +530,8 @@ export default function App() {
           onReset={() => {setGeometryDraft(defaultComposition);setCropAspect(null);setNotice('构图已重置，应用后生效');}} />
         <CreativePanel state={document} selectedId={selectedLayerId} onSelect={setSelectedLayerId} onLayers={(next,label)=>updateCreative({layers:next},label)} onLayer={updateLayer} onBorder={border=>updateCreative({border},'边框调整')} onSticker={file=>void importSticker(file)} onApply={applyTool} onCancel={cancelTool} onStart={startCreativeGesture} onEnd={finishGesture}/>
         <LocalPanel locals={locals} selectedId={selectedLocalId} onSelect={setSelectedLocalId} onLocals={(next,label)=>updateCreative({locals:next},label)} onLocal={updateLocal} brushSize={brushSize} feather={maskFeather} erase={eraseMask} showMask={showMask} onBrushSize={setBrushSize} onFeather={setMaskFeather} onErase={setEraseMask} onShowMask={setShowMask} onStart={startCreativeGesture} onEnd={finishGesture} onApply={applyTool} onCancel={cancelTool}/>
-        {mobileTool==='more'?<section className="more-panel"><h2>更多工具</h2><div className="phase2-entry"><button onClick={()=>changeTool('creative')}>文字 · 贴纸 · 边框</button><button onClick={()=>changeTool('local')}>局部修图</button></div><button disabled={draftBusy} onClick={()=>void saveCurrentDraft()}><Save size={16}/>保存草稿</button><p>主动保存后，原图和编辑状态存于此设备并自动更新。</p><button onClick={()=>downloadJson(userPresets.filter(item=>!item.deletedAt),'光调模板备份.json')}>备份模板</button><button onClick={()=>presetInput.current?.click()}>恢复模板备份</button><button onClick={()=>changeTool('ai')}>AI 服务设置</button><h3>编辑历史</h3><div className="history-list">{editorHistory.entries.map((entry,index)=><button key={index} aria-current={index===editorHistory.cursor?'step':undefined} onClick={()=>{setHistory({...historyRef.current,cursor:index});setNotice(`已回到：${entry.label}`);}}>{index+1}. {entry.label}</button>)}</div><h3>本地草稿</h3>{draftList}</section>:null}
+        {mobileTool==='portrait'?<PortraitPanel regions={portraits} selectedId={selectedPortraitId} onSelect={id=>{invalidatePortrait();setSelectedPortraitId(id);}} onRegions={(next,label)=>{invalidatePortrait();updateCreative({portraits:next},label);}} onRegion={updatePortrait} busy={portraitBusy} status={portraitStatus} onDetect={()=>void identifyPortraits()} onStop={()=>{invalidatePortrait();setPortraitStatus('已取消识别，可继续手动修图');}} brushSize={brushSize} feather={maskFeather} erase={eraseMask} showMask={showMask} onBrushSize={setBrushSize} onFeather={setMaskFeather} onErase={setEraseMask} onShowMask={setShowMask} onStart={startPortraitGesture} onEnd={finishGesture} onApply={applyTool} onCancel={cancelTool}/>:null}
+        {mobileTool==='more'?<section className="more-panel"><h2>更多工具</h2><div className="phase2-entry"><button onClick={()=>changeTool('creative')}>文字 · 贴纸 · 边框</button><button onClick={()=>changeTool('local')}>局部修图</button><button onClick={()=>changeTool('portrait')}>人像修图</button></div><button disabled={draftBusy} onClick={()=>void saveCurrentDraft()}><Save size={16}/>保存草稿</button><p>主动保存后，原图和编辑状态存于此设备并自动更新。</p><button onClick={()=>downloadJson(userPresets.filter(item=>!item.deletedAt),'光调模板备份.json')}>备份模板</button><button onClick={()=>presetInput.current?.click()}>恢复模板备份</button><button onClick={()=>changeTool('ai')}>AI 服务设置</button><h3>编辑历史</h3><div className="history-list">{editorHistory.entries.map((entry,index)=><button key={index} aria-current={index===editorHistory.cursor?'step':undefined} onClick={()=>{setHistory({...historyRef.current,cursor:index});setNotice(`已回到：${entry.label}`);}}>{index+1}. {entry.label}</button>)}</div><h3>本地草稿</h3>{draftList}</section>:null}
         {saveSheet?<div className="modal-backdrop"><section className="modal export-settings" role="dialog" aria-modal="true" aria-label="保存与导出"><header><h2>保存与导出</h2><button aria-label="关闭保存面板" onClick={()=>setSaveSheet(false)}><X size={18}/></button></header>
           <div className="section-title"><Download size={17} /><h2>导出设置</h2></div>
           <div className="export-grid"><label>格式<select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}><option value="jpeg">JPG</option><option value="png">PNG</option><option value="webp">WebP</option></select></label><label>质量<select value={quality} onChange={(event) => setQuality(Number(event.target.value))}><option value="70">标准 70%</option><option value="90">高 90%</option><option value="100">最高 100%</option></select></label></div>
@@ -523,7 +549,7 @@ export default function App() {
         ['adjust', '调节', SlidersHorizontal], ['crop', '构图', Crop],
         ['ai', 'AI', Sparkles], ['more', '更多', MoreHorizontal],
       ] as const).map(([tool, label, Icon]) => <button key={tool} type="button" role="tab"
-        aria-selected={mobileTool === tool||tool==='more'&&['creative','local'].includes(mobileTool)} onClick={() => selectMobileTool(tool)}><Icon size={20} /><span>{label}</span></button>)}
+        aria-selected={mobileTool === tool||tool==='more'&&['creative','local','portrait'].includes(mobileTool)} onClick={() => selectMobileTool(tool)}><Icon size={20} /><span>{label}</span></button>)}
     </nav>
     {saveDialog ? <div className="modal-backdrop" role="presentation"><form className="modal preset-save-dialog" role="dialog" aria-modal="true" aria-labelledby="preset-save-title" onSubmit={(event) => { event.preventDefault(); void persistCurrent(saveDialog.name,undefined,saveDialog.tags===undefined?undefined:[...new Set(saveDialog.tags.split(/[,，]/).map(tag=>tag.trim()).filter(Boolean))]); }}>
       <header><h2 id="preset-save-title">{saveDialog.mode === 'create' ? '新建模板' : '另存为新模板'}</h2><button type="button" aria-label="关闭模板保存窗口" onClick={() => { setSaveDialog(null); setNotice('已取消保存，当前调整已保留'); }}><X size={18} /></button></header>

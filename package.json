@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/prepare-portrait-assets.mjs",
+    "prebuild": "node scripts/prepare-portrait-assets.mjs",
     "dev": "node scripts/dev.mjs",
     "build": "tsc -b && vite build",
     "test": "vitest run",
@@ -11,6 +13,7 @@
     "server": "node --env-file-if-exists=.env server/index.ts"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.32",
     "express": "^5.1.0",
     "idb": "^8.0.3",
     "lucide-react": "^0.468.0",

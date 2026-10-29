@@ -5,6 +5,10 @@ const preset = { id: 'saved', name: '专业模板', source: 'manual', tags: ['�
   previewType: 'portrait', createdAt: '2026-10-12', updatedAt: '2026-10-12' };
 
 describe('professional preset backups', () => {
+  it('does not import portrait locations or masks into reusable color templates',()=>{
+    const [restored]=parsePresetBackup(JSON.stringify([{...preset,recipe:{brightness:14},portraits:[{id:'face',mask:{outline:[{x:.2,y:.3}]},recipe:{smooth:40}}]}]));
+    expect(restored.recipe.brightness).toBe(14);expect(restored).not.toHaveProperty('portraits');
+  });
   it('preserves independent filter strength without storing image composition in a template',()=>{
     const [restored]=parsePresetBackup(JSON.stringify([{...preset,recipe:{brightness:14},filter:{id:'film',name:'胶片',recipe:{contrast:-20},strength:36},composition:{rotation:1}}]));
     expect(restored.filter?.strength).toBe(36);

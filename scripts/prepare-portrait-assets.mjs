@@ -1,0 +1,14 @@
+import {copyFile,mkdir,readFile} from 'node:fs/promises';
+import {createRequire} from 'node:module';
+import {dirname,join} from 'node:path';
+import {createHash} from 'node:crypto';
+const require=createRequire(import.meta.url),root=dirname(require.resolve('@mediapipe/tasks-vision'));
+const target=new URL('../public/models/portrait/',import.meta.url);
+const version=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version;
+if(version!=='0.10.32')throw new Error('人像运行库版本不符');
+await mkdir(new URL('wasm/',target),{recursive:true});
+await copyFile(join(root,'vision_bundle.cjs'),new URL('vision_bundle.js',target));
+for(const file of ['vision_wasm_internal.js','vision_wasm_internal.wasm','vision_wasm_nosimd_internal.js','vision_wasm_nosimd_internal.wasm'])await copyFile(join(root,'wasm',file),new URL(`wasm/${file}`,target));
+const model=await readFile(new URL('face_landmarker.task',target));
+if(createHash('sha256').update(model).digest('hex')!=='64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff')throw new Error('人像模型文件损坏或版本不符');
+console.log('本地人像模型运行文件已准备（同源托管）');

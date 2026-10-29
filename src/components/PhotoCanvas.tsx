@@ -6,7 +6,8 @@ import { cropSourceRect, fullCrop, type CropRect } from '../lib/crop';
 import CropOverlay from './CropOverlay';
 import { defaultComposition, straightenScale, transformedSize, type Composition, type FilterState } from '../domain/editorDocument';
 import { borderLayout, type AssetUrls, type CreativeState, type ImageGeometry, type LocalAdjustment } from '../domain/creative';
-import { addBorder, applyLocalAdjustments, drawCreativeLayers } from '../lib/creativeRender';
+import { addBorder, applyLocalAdjustments,applyPortraitAdjustments, drawCreativeLayers } from '../lib/creativeRender';
+import type {PortraitRegion} from '../domain/portrait';
 import EditorSurface,{type PreviewFrame} from './EditorSurface';
 
 type Props = { imageUrl: string; recipe: AdjustmentRecipe; fileName: string; crop?: CropRect;
@@ -24,14 +25,14 @@ async function loadImage(url: string) {
   return image;
 }
 
-async function processPixels(pixels: Uint8ClampedArray, recipe: AdjustmentRecipe, width: number, height: number,locals?:LocalAdjustment[],geometry?:ImageGeometry) {
-  if (typeof Worker === 'undefined'||locals&&typeof OffscreenCanvas==='undefined') return locals&&geometry?applyLocalAdjustments(pixels,width,height,locals,geometry):applyRecipeToPixels(pixels, recipe, width, height);
+async function processPixels(pixels: Uint8ClampedArray, recipe: AdjustmentRecipe, width: number, height: number,locals?:LocalAdjustment[],geometry?:ImageGeometry,portraits?:PortraitRegion[]) {
+  if (typeof Worker === 'undefined'||(locals||portraits)&&typeof OffscreenCanvas==='undefined') return portraits&&geometry?applyPortraitAdjustments(pixels,width,height,portraits,geometry):locals&&geometry?applyLocalAdjustments(pixels,width,height,locals,geometry):applyRecipeToPixels(pixels, recipe, width, height);
   const worker = new Worker(new URL('../workers/imageWorker.ts', import.meta.url), { type: 'module' });
   try {
     return await new Promise<Uint8ClampedArray>((resolve, reject) => {
       worker.onmessage = (event: MessageEvent<{ pixels: ArrayBuffer }>) => resolve(new Uint8ClampedArray(event.data.pixels));
       worker.onerror = (event) => reject(new Error(event.message || '后台图像处理失败'));
-      worker.postMessage({ pixels: pixels.buffer, recipe, width, height,locals,geometry }, [pixels.buffer]);
+      worker.postMessage({ pixels: pixels.buffer, recipe, width, height,locals,geometry,portraits }, [pixels.buffer]);
     });
   } finally { worker.terminate(); }
 }
@@ -71,6 +72,7 @@ async function adjustCanvas(canvas: HTMLCanvasElement, recipe: AdjustmentRecipe)
 
 export async function finishCreative(canvas:HTMLCanvasElement,creative:CreativeState|undefined,assets:AssetUrls,geometry:ImageGeometry,maxEdge=0){
  if(creative?.locals?.length){const ctx=canvas.getContext('2d');if(!ctx)throw new Error('无法读取局部调整画布');const frame=ctx.getImageData(0,0,canvas.width,canvas.height);const result=await processPixels(frame.data,{} as AdjustmentRecipe,canvas.width,canvas.height,creative.locals,geometry);ctx.putImageData(new ImageData(result,canvas.width,canvas.height),0,0);}
+ if(creative?.portraits?.some(region=>region.enabled&&Object.values(region.recipe).some(Boolean))){const ctx=canvas.getContext('2d');if(!ctx)throw new Error('无法读取人像画布');const frame=ctx.getImageData(0,0,canvas.width,canvas.height);const result=await processPixels(frame.data,{} as AdjustmentRecipe,canvas.width,canvas.height,undefined,geometry,creative.portraits);ctx.putImageData(new ImageData(result,canvas.width,canvas.height),0,0);}
  if(creative?.layers?.length)await drawCreativeLayers(canvas,creative.layers,assets);
  const bordered=addBorder(canvas,creative?.border),size=calculateOutputSize(bordered.width,bordered.height,maxEdge);
  if(size.width===bordered.width&&size.height===bordered.height)return bordered;
@@ -147,7 +149,7 @@ export default function PhotoCanvas({ imageUrl, recipe, fileName, crop = fullCro
       finally { if (active) setBusy(false); }
     }, 90);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [imageUrl, recipe, crop, onImageInfo,composition.rotation,composition.flipX,composition.flipY,composition.straighten,filter,cropEditing,creative?.layers,creative?.locals,creative?.border,assets]);
+  }, [imageUrl, recipe, crop, onImageInfo,composition.rotation,composition.flipX,composition.flipY,composition.straighten,filter,cropEditing,creative?.layers,creative?.locals,creative?.portraits,creative?.border,assets]);
 
   const setSplitFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
     if (interactionBlocked) return;

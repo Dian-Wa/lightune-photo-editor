@@ -1,7 +1,10 @@
-import { cleanup, fireEvent, render as mount, screen, waitFor, within } from '@testing-library/react';
+import { act,cleanup, fireEvent, render as mount, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import * as presetStore from './lib/presetStore';
+import * as portraitDetector from './lib/portraitDetector';
+import * as photoRenderer from './components/PhotoCanvas';
+import type {DetectedFace} from './domain/portrait';
 const render=(element:React.ReactNode)=>{const result=mount(element);fireEvent.click(screen.getByRole('button',{name:'体验样片'}));fireEvent.click(within(screen.getByLabelText('调整参数面板')).getByRole('button',{name:'全部'}));return result;};
 
 beforeEach(() => {
@@ -13,6 +16,48 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('photo editor workspace', () => {
+  it('does not redirect a manual portrait gesture when an older detection finishes',async()=>{
+    vi.spyOn(photoRenderer,'renderSourceImage').mockResolvedValue({canvas:document.createElement('canvas'),sourceSize:{width:100,height:100},originalSize:{width:100,height:100}});
+    vi.stubGlobal('createImageBitmap',vi.fn().mockResolvedValue({close:vi.fn()}));
+    let finish!:(faces:DetectedFace[])=>void;const pending=new Promise<DetectedFace[]>(resolve=>{finish=resolve;});
+    vi.spyOn(portraitDetector,'detectPortraits').mockReturnValue(pending);
+    render(<App/>);fireEvent.click(screen.getByRole('tab',{name:'更多'}));fireEvent.click(screen.getByRole('button',{name:'人像修图'}));fireEvent.click(screen.getByRole('button',{name:'识别人脸'}));
+    await waitFor(()=>expect(screen.getByRole('button',{name:'取消识别'})).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button',{name:'添加手动皮肤区域'}));const slider=screen.getByRole('slider',{name:'肤色亮度'});fireEvent.pointerDown(slider);fireEvent.change(slider,{target:{value:'20'}});
+    await act(async()=>{finish([{id:'late',landmarks:Array.from({length:478},(_,i)=>({x:.5+Math.cos(i)*.2,y:.5+Math.sin(i)*.2}))}]);await pending;});
+    fireEvent.change(slider,{target:{value:'35'}});fireEvent.pointerUp(slider);
+    expect(screen.getByRole('navigation',{name:'人像区域'}).children).toHaveLength(1);expect(slider).toHaveValue('35');
+  });
+  it('keeps manual editing available when local detection fails',async()=>{
+    vi.spyOn(photoRenderer,'renderSourceImage').mockResolvedValue({canvas:document.createElement('canvas'),sourceSize:{width:100,height:100},originalSize:{width:100,height:100}});
+    vi.stubGlobal('createImageBitmap',vi.fn().mockResolvedValue({close:vi.fn()}));
+    vi.spyOn(portraitDetector,'detectPortraits').mockRejectedValue(new Error('本地模型加载失败，可手动涂抹皮肤区域'));
+    render(<App/>);fireEvent.click(screen.getByRole('tab',{name:'更多'}));fireEvent.click(screen.getByRole('button',{name:'人像修图'}));fireEvent.click(screen.getByRole('button',{name:'识别人脸'}));
+    await waitFor(()=>expect(screen.getByText(/本地模型加载失败/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button',{name:'添加手动皮肤区域'}));expect(screen.getByRole('slider',{name:'人像柔肤'})).toHaveValue('0');
+  });
+  it('ignores late detection results after cancelling portrait edits',async()=>{
+    vi.spyOn(photoRenderer,'renderSourceImage').mockResolvedValue({canvas:document.createElement('canvas'),sourceSize:{width:100,height:100},originalSize:{width:100,height:100}});
+    vi.stubGlobal('createImageBitmap',vi.fn().mockResolvedValue({close:vi.fn()}));
+    let finish!:(faces:DetectedFace[])=>void;
+    const response=new Promise<DetectedFace[]>(resolve=>{finish=resolve;});
+    vi.spyOn(portraitDetector,'detectPortraits').mockReturnValue(response);
+    render(<App/>);fireEvent.click(screen.getByRole('tab',{name:'更多'}));fireEvent.click(screen.getByRole('button',{name:'人像修图'}));fireEvent.click(screen.getByRole('button',{name:'识别人脸'}));
+    await waitFor(()=>expect(screen.getByRole('button',{name:'取消识别'})).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button',{name:'取消人像修图'}));finish([{id:'late',landmarks:Array.from({length:478},()=>({x:.5,y:.5}))}]);
+    await response;fireEvent.click(screen.getByRole('tab',{name:'更多'}));fireEvent.click(screen.getByRole('button',{name:'人像修图'}));
+    expect(screen.getByRole('navigation',{name:'人像区域'}).children).toHaveLength(0);
+  });
+  it('edits a manual portrait region independently and cancels it without changing global color',()=>{
+    render(<App/>);fireEvent.change(screen.getByLabelText('亮度'),{target:{value:'17'}});
+    fireEvent.click(screen.getByRole('tab',{name:'更多'}));fireEvent.click(screen.getByRole('button',{name:'人像修图'}));
+    fireEvent.click(screen.getByRole('button',{name:'添加手动皮肤区域'}));
+    fireEvent.change(screen.getByRole('slider',{name:'人像柔肤'}),{target:{value:'45'}});
+    expect(screen.getByRole('slider',{name:'人像柔肤'})).toHaveValue('45');
+    fireEvent.click(screen.getByRole('button',{name:'撤销'}));expect(screen.getByRole('slider',{name:'人像柔肤'})).toHaveValue('0');
+    fireEvent.click(screen.getByRole('button',{name:'重做'}));expect(screen.getByRole('slider',{name:'人像柔肤'})).toHaveValue('45');
+    fireEvent.click(screen.getByRole('button',{name:'取消人像修图'}));expect(screen.queryByRole('slider',{name:'人像柔肤'})).not.toBeInTheDocument();expect(screen.getByLabelText('亮度')).toHaveValue('17');
+  });
   it('groups a text editing session into one undo step',()=>{
     render(<App/>);
     fireEvent.click(screen.getByRole('tab',{name:'更多'}));

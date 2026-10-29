@@ -10,5 +10,7 @@ playwright-report/
 test-results/
 design/qa/professional/cache/
 .deployment/
+public/models/portrait/vision_bundle.js
+public/models/portrait/wasm/
 .env.*
 !.env.example
