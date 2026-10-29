@@ -1,0 +1,19 @@
+import {createLocal,localKeys,type LocalAdjustment,type LocalMask} from '../domain/creative';
+import {controlDefinitions} from '../domain/recipe';
+type Props={locals:LocalAdjustment[];selectedId:string|null;onSelect:(id:string)=>void;onLocals:(locals:LocalAdjustment[],label:string)=>void;onLocal:(local:LocalAdjustment)=>void;brushSize:number;feather:number;erase:boolean;showMask:boolean;onBrushSize:(value:number)=>void;onFeather:(value:number)=>void;onErase:(value:boolean)=>void;onShowMask:(value:boolean)=>void;onStart:()=>void;onEnd:()=>void;onApply:()=>void;onCancel:()=>void};
+export default function LocalPanel({locals,selectedId,onSelect,onLocals,onLocal,brushSize,feather,erase,showMask,onBrushSize,onFeather,onErase,onShowMask,onStart,onEnd,onApply,onCancel}:Props){
+ const selected=locals.find(local=>local.id===selectedId);
+ const change=(patch:Partial<LocalAdjustment>)=>{if(selected)onLocal({...selected,...patch});};
+ const range=(label:string,value:number,min:number,max:number,update:(value:number)=>void,history=true)=><label key={label} className="phase2-range">{label}<input aria-label={label} type="range" min={min} max={max} value={value} onPointerDown={history?onStart:undefined} onPointerUp={history?onEnd:undefined} onPointerCancel={history?onEnd:undefined} onChange={event=>update(Number(event.target.value))}/><output>{value}</output></label>;
+ const add=(type:LocalMask['type'])=>{const local=createLocal(crypto.randomUUID(),type);onLocals([...locals,local],'新增局部区域');onSelect(local.id);onErase(false);};
+ return <section className="local-panel" aria-label="局部修图工具"><div className="phase2-content"><h2>局部修图</h2><div className="local-add"><button onClick={()=>add('brush')}>新建画笔</button><button onClick={()=>add('linear')}>新建渐变</button><button onClick={()=>add('radial')}>新建径向</button></div>
+  {selected?<><div className="phase2-check"><label><input type="checkbox" aria-label="启用当前局部" checked={selected.enabled} onChange={event=>change({enabled:event.target.checked})}/>启用效果</label><label><input aria-label="显示蒙版" type="checkbox" checked={showMask} onChange={event=>onShowMask(event.target.checked)}/>显示蒙版</label><label><input aria-label="反选蒙版" type="checkbox" checked={selected.mask.inverted} onChange={event=>change({mask:{...selected.mask,inverted:event.target.checked}})}/>反选</label></div>
+  <p>{selected.mask.type==='brush'?'在图上涂抹，橡皮擦只擦除当前蒙版；大小与羽化作用于后续笔画。':'在图片上拖动定义区域：渐变从起点向终点淡出，径向由中心向外扩展。'}</p>
+  {selected.mask.type==='brush'?<><div className="phase2-tabs"><button aria-pressed={!erase} onClick={()=>onErase(false)}>画笔</button><button aria-pressed={erase} onClick={()=>onErase(true)}>橡皮擦</button></div>{range('画笔大小',Math.round(brushSize*100),1,30,value=>onBrushSize(value/100),false)}</>:null}
+  {range('蒙版羽化',Math.round(feather*100),0,100,value=>{onFeather(value/100);if(selected.mask.type!=='brush')change({mask:{...selected.mask,feather:value/100}});},selected.mask.type!=='brush')}
+  {range('局部强度',selected.amount,0,100,value=>change({amount:value}))}
+  {localKeys.map(key=>range(`局部${controlDefinitions[key].label}`,selected.recipe[key],-100,100,value=>change({recipe:{...selected.recipe,[key]:value}})))}
+  <div className="local-add"><button onClick={()=>change({mask:{...selected.mask,strokes:[]},recipe:{exposure:0,contrast:0,saturation:0,temperature:0,clarity:0,softness:0}})}>重置当前区域</button><button onClick={()=>onLocals(locals.filter(item=>item.id!==selected.id),'移除局部区域')}>移除当前区域</button></div>
+  </>:<p>创建一个局部区域，再在图片上绘制。局部调整不会改变其他区域。</p>}
+ </div><nav className="phase2-tabs" aria-label="局部区域">{locals.map((local,index)=><button key={local.id} aria-pressed={local.id===selectedId} onClick={()=>{onSelect(local.id);onFeather(local.mask.feather);}}>{index+1} · {local.name}</button>)}</nav><div className="tool-confirm"><button onClick={onCancel}>取消局部修图</button><button onClick={onApply}>应用局部修图</button></div></section>;
+}

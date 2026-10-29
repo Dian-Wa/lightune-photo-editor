@@ -5,6 +5,7 @@ import * as presetStore from './lib/presetStore';
 const render=(element:React.ReactNode)=>{const result=mount(element);fireEvent.click(screen.getByRole('button',{name:'体验样片'}));fireEvent.click(within(screen.getByLabelText('调整参数面板')).getByRole('button',{name:'全部'}));return result;};
 
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver',class {observe(){}unobserve(){}disconnect(){}});
   const values: Record<string, string> = {};
   vi.stubGlobal('localStorage', { getItem: (key: string) => values[key] || null,
     setItem: (key: string, value: string) => { values[key] = value; }, toJSON: () => values });
@@ -12,6 +13,47 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe('photo editor workspace', () => {
+  it('groups a text editing session into one undo step',()=>{
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab',{name:'更多'}));
+    fireEvent.click(screen.getByRole('button',{name:'文字 · 贴纸 · 边框'}));
+    fireEvent.click(screen.getByRole('button',{name:'添加文字'}));
+    const text=screen.getByLabelText('文字内容');
+    fireEvent.pointerDown(text);fireEvent.focus(text);fireEvent.pointerUp(text);
+    fireEvent.change(text,{target:{value:'第一句'}});fireEvent.change(text,{target:{value:'完整文字'}});fireEvent.blur(text);
+    fireEvent.click(screen.getByRole('button',{name:'撤销'}));
+    expect(screen.getByLabelText('文字内容')).toHaveValue('写下你的故事');
+  });
+  it('hides comparison during creative editing and restores its position afterward',()=>{
+    const {container}=render(<App/>);
+    fireEvent.change(screen.getByRole('slider',{name:'前后对比位置'}),{target:{value:'80'}});
+    fireEvent.click(screen.getByRole('tab',{name:'更多'}));
+    fireEvent.click(screen.getByRole('button',{name:'文字 · 贴纸 · 边框'}));
+    expect((container.querySelector('.original-layer') as HTMLElement).style.clipPath).toBe('inset(0 100% 0 0)');
+    fireEvent.click(screen.getByRole('button',{name:'取消创作'}));
+    expect((container.querySelector('.original-layer') as HTMLElement).style.clipPath).toBe('inset(0 20% 0 0)');
+  });
+  it('cancels newly added creative content without changing the photo recipe',()=>{
+    render(<App/>);
+    fireEvent.change(screen.getByLabelText('亮度'),{target:{value:'17'}});
+    fireEvent.click(screen.getByRole('tab',{name:'更多'}));
+    fireEvent.click(screen.getByRole('button',{name:'文字 · 贴纸 · 边框'}));
+    fireEvent.click(screen.getByRole('button',{name:'添加文字'}));
+    expect(screen.getByLabelText('文字内容')).toHaveValue('写下你的故事');
+    fireEvent.click(screen.getByRole('button',{name:'取消创作'}));
+    expect(screen.queryByLabelText('文字内容')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('亮度')).toHaveValue('17');
+  });
+  it('creates a local region with six independent adjustments and undoes it',()=>{
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab',{name:'更多'}));fireEvent.click(screen.getByRole('button',{name:'局部修图'}));
+    fireEvent.click(screen.getByRole('button',{name:'新建径向'}));
+    expect(screen.getByRole('slider',{name:'局部曝光'})).toHaveValue('0');
+    fireEvent.change(screen.getByRole('slider',{name:'局部曝光'}),{target:{value:'38'}});
+    fireEvent.click(screen.getByRole('button',{name:'撤销'}));
+    expect(screen.getByRole('slider',{name:'局部曝光'})).toHaveValue('0');
+    expect(screen.getByLabelText('曝光')).toHaveValue('0');
+  });
   it('retains current editing when draft storage is full',async()=>{
     vi.spyOn(presetStore,'saveDraft').mockRejectedValue(new Error('本地空间不足'));
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(new Uint8Array([1,2,3]))));

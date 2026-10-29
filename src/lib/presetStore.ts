@@ -66,7 +66,7 @@ export function parsePresetBackup(raw: string): Preset[] {
   });
 }
 
-export type EditorDraft = { id:string; version:1; name:string; source:Blob; document:EditorDocument; updatedAt:string; thumbnail?:string };
+export type EditorDraft = { id:string; version:1; name:string; source:Blob; document:EditorDocument; updatedAt:string; thumbnail?:string;assets?:Record<string,Blob> };
 export async function loadDrafts(): Promise<EditorDraft[]> {
   const db=await database();
   return db ? ((await db.getAll('drafts')) as EditorDraft[]).filter(draft=>draft.version===1).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)) : [];

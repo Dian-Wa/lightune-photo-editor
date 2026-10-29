@@ -1,9 +1,10 @@
 import { emptyRecipe, type AdjustmentRecipe } from './recipe';
 import { fullCrop, normalizeCrop, type CropRect } from '../lib/crop';
+import type { CreativeState } from './creative';
 
 export type Composition = { rotation: number; flipX: boolean; flipY: boolean; straighten: number; crop: CropRect };
 export type FilterState = { id: string; name: string; recipe: AdjustmentRecipe; strength: number };
-export type EditorDocument = { version: 1; recipe: AdjustmentRecipe; filter: FilterState | null; composition: Composition; selectedId: string };
+export type EditorDocument = CreativeState & { version: 1; recipe: AdjustmentRecipe; filter: FilterState | null; composition: Composition; selectedId: string };
 export type DocumentHistory = { entries: { document: EditorDocument; label: string }[]; cursor: number };
 export const defaultComposition: Composition = { rotation: 0, flipX: false, flipY: false, straighten: 0, crop: fullCrop };
 export const createDocument = (recipe: AdjustmentRecipe = emptyRecipe): EditorDocument => ({version:1,recipe,filter:null,composition:{...defaultComposition},selectedId:'clean'});
